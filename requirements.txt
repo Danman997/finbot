@@ -1,0 +1,6 @@
+pyTelegramBotAPI
+psycopg2-binary
+matplotlib
+pandas
+scikit-learn
+numpy
