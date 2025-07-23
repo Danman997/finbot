@@ -13,6 +13,9 @@ import re
 import time
 import random
 import string
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # --- Настройки бота ---
 BOT_TOKEN = os.environ.get('BOT_TOKEN') 
@@ -26,7 +29,8 @@ if not DATABASE_URL:
     print("Ошибка: URL базы данных не найден. Установите переменную окружения DATABASE_URL.")
     exit()
 
-ADMIN_USER_ID = int(os.environ.get('ADMIN_USER_ID', '0'))
+# Используйте ваш ID Telegram в качестве ID администратора
+ADMIN_USER_ID = 498410375
 
 # --- Модель классификации (scikit-learn) ---
 vectorizer = TfidfVectorizer()
@@ -128,7 +132,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS families (
                 id SERIAL PRIMARY KEY,
                 name TEXT UNIQUE NOT NULL,
-                owner_user_id BIGINT UNIQUE,
+                owner_user_id BIGINT NULL,
                 subscription_end_date TIMESTAMP NULL,
                 is_active BOOLEAN DEFAULT FALSE,
                 invite_code TEXT UNIQUE NULL
@@ -140,22 +144,6 @@ def init_db():
                 family_id INTEGER NOT NULL REFERENCES families(id) ON DELETE CASCADE,
                 role TEXT DEFAULT 'member',
                 PRIMARY KEY (user_id, family_id)
-            );
-        ''')
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS recurring_payments (
-                id SERIAL PRIMARY KEY,
-                user_id BIGINT NOT NULL,
-                family_id INTEGER NULL,
-                title TEXT NOT NULL,
-                amount REAL NULL,
-                currency TEXT NULL,
-                next_due_date DATE NOT NULL,
-                recurrence_interval_unit TEXT NOT NULL,
-                recurrence_interval_n INTEGER NOT NULL,
-                reminder_offset_days INTEGER NOT NULL DEFAULT 7,
-                last_reminded_date DATE NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         ''')
         conn.commit()
@@ -178,6 +166,15 @@ def get_user_active_family_id(user_id):
         return None
     finally:
         conn.close()
+
+def is_user_registered(user_id):
+    conn = get_db_connection()
+    if not conn: return False
+    cursor = conn.cursor()
+    cursor.execute("SELECT 1 FROM user_families WHERE user_id = %s", (user_id,))
+    is_registered = cursor.fetchone()
+    conn.close()
+    return is_registered is not None
 
 def is_family_subscription_active(family_id):
     if not family_id:
@@ -225,41 +222,10 @@ def get_report_period_keyboard():
 @bot.message_handler(commands=['start', 'help', 'menu'])
 def send_welcome(message):
     user_id = message.from_user.id
-    conn = get_db_connection()
-    if not conn:
-        bot.reply_to(message, "Проблема с подключением к базе данных.", reply_markup=get_main_menu_keyboard())
-        return
-    cursor = conn.cursor()
-    try:
-        cursor.execute("SELECT 1 FROM user_families WHERE user_id = %s", (user_id,))
-        is_registered = cursor.fetchone()
-        
-        if not is_registered:
-            family_name = f"Семья_{user_id}"
-            invite_code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
-            cursor.execute(
-                "INSERT INTO families (name, owner_user_id, invite_code) VALUES (%s, %s, %s) RETURNING id",
-                (family_name, user_id, invite_code)
-            )
-            family_id = cursor.fetchone()[0]
-            cursor.execute(
-                "INSERT INTO user_families (user_id, family_id, role) VALUES (%s, %s, 'admin')",
-                (user_id, family_id)
-            )
-            conn.commit()
-            bot.reply_to(message, "Привет! Ты был автоматически зарегистрирован. "
-                                   "Теперь ты можешь добавлять расходы и смотреть отчеты. "
-                                   "Если захочешь пригласить других, используй меню 'Семья'.", reply_markup=get_main_menu_keyboard())
-        else:
-            bot.reply_to(message, "С возвращением! Выбери опцию ниже:", reply_markup=get_main_menu_keyboard())
-    except psycopg2.errors.UniqueViolation:
-        conn.rollback()
-        bot.reply_to(message, "Вы уже зарегистрированы. Выбери опцию ниже:", reply_markup=get_main_menu_keyboard())
-    except Exception as e:
-        conn.rollback()
-        bot.reply_to(message, f"Произошла ошибка при регистрации: {e}")
-    finally:
-        conn.close()
+    if not is_user_registered(user_id):
+        bot.reply_to(message, "Привет! Вы пока не зарегистрированы. Пожалуйста, обратитесь к администратору, чтобы он добавил вас.", reply_markup=types.ReplyKeyboardRemove())
+    else:
+        bot.reply_to(message, "С возвращением! Выбери опцию ниже:", reply_markup=get_main_menu_keyboard())
 
 # --- Основные хэндлеры для меню ---
 @bot.message_handler(regexp='^💸 Добавить расход$')
@@ -267,39 +233,25 @@ def handle_add_expense_menu(message):
     user_id = message.from_user.id
     family_id = get_user_active_family_id(user_id)
     if family_id is None:
-        bot.send_message(message.chat.id, "Вы не состоите в активной семье. Для записи расходов вам нужно написать /start.", reply_markup=get_main_menu_keyboard())
+        bot.send_message(message.chat.id, "Вы не состоите в активной семье. Для записи расходов вам нужно быть добавленным администратором. Напишите /start.", reply_markup=get_main_menu_keyboard())
         return
-    bot.send_message(message.chat.id, "Отлично! Просто напиши 'описание сумма валюта', например: 'хлеб 100тг'.", reply_markup=types.ReplyKeyboardRemove())
+    bot.send_message(message.chat.id, "Отлично! Просто напиши 'описание сумма', например: 'хлеб 100, молоко 500'.", reply_markup=types.ReplyKeyboardRemove())
 
 @bot.message_handler(regexp='^📊 Отчеты$')
 def handle_report_menu(message):
     user_id = message.from_user.id
     family_id = get_user_active_family_id(user_id)
     if family_id is None:
-        bot.send_message(message.chat.id, "Вы не состоите в активной семье. Для получения отчетов нужна семья. Напишите /start.", reply_markup=get_main_menu_keyboard())
+        bot.send_message(message.chat.id, "Вы не состоите в активной семье. Для получения отчетов нужна семья.", reply_markup=get_main_menu_keyboard())
         return
     bot.send_message(message.chat.id, "За какой период вы хотите отчет?", reply_markup=get_report_period_keyboard())
-
-@bot.message_handler(regexp='^⏰ Напоминания$')
-def handle_reminders_menu(message):
-    user_id = message.from_user.id
-    family_id = get_user_active_family_id(user_id)
-    if family_id is None:
-        bot.send_message(message.chat.id, "Вы не состоите в активной семье. Для управления напоминаниями нужна семья. Напишите /start.", reply_markup=get_main_menu_keyboard())
-        return
-    
-    keyboard = types.InlineKeyboardMarkup(row_width=1)
-    btn1 = types.InlineKeyboardButton("➕ Добавить напоминание", callback_data='add_recurring')
-    btn2 = types.InlineKeyboardButton("📝 Посмотреть мои напоминания", callback_data='my_reminders')
-    keyboard.add(btn1, btn2)
-    bot.send_message(message.chat.id, "Что вы хотите сделать с напоминаниями?", reply_markup=keyboard)
 
 @bot.message_handler(regexp='^👨‍👩‍👧‍👦 Семья$')
 def handle_family_menu(message):
     user_id = message.from_user.id
     family_id = get_user_active_family_id(user_id)
     if family_id is None:
-        bot.send_message(message.chat.id, "Вы пока не состоите ни в одной семье. Напишите /start.", reply_markup=get_main_menu_keyboard())
+        bot.send_message(message.chat.id, "Вы пока не состоите ни в одной семье.", reply_markup=get_main_menu_keyboard())
         return
     
     keyboard = types.InlineKeyboardMarkup(row_width=1)
@@ -307,7 +259,8 @@ def handle_family_menu(message):
     btn2 = types.InlineKeyboardButton("🚶 Выйти из семьи", callback_data='leave_family_confirm')
     btn3 = types.InlineKeyboardButton("👥 Члены семьи", callback_data='family_members')
     btn4 = types.InlineKeyboardButton("🔗 Пригласить в семью", callback_data='invite_member')
-    keyboard.add(btn1, btn2, btn3, btn4)
+    btn5 = types.InlineKeyboardButton("✏️ Изменить название семьи", callback_data='edit_family_name')
+    keyboard.add(btn1, btn2, btn3, btn4, btn5)
     bot.send_message(message.chat.id, "Что вы хотите сделать с семьей?", reply_markup=keyboard)
 
 # --- Callback хэндлеры для кнопок ---
@@ -381,18 +334,6 @@ def process_report_period_final(message):
     plt.close(fig)
     bot.send_photo(chat_id, buf, reply_markup=get_main_menu_keyboard())
 
-@bot.callback_query_handler(func=lambda call: call.data == 'add_recurring')
-def handle_add_recurring_callback(call):
-    bot.edit_message_text("Отлично! Начнем с добавления напоминания. "
-                          "Введите название регулярного платежа (например, 'Страховка машины'):",
-                          call.message.chat.id, call.message.message_id, reply_markup=None)
-    bot.register_next_step_handler(call.message, add_recurring_step2_title)
-
-@bot.callback_query_handler(func=lambda call: call.data == 'my_reminders')
-def handle_my_reminders_callback(call):
-    bot.delete_message(call.message.chat.id, call.message.message_id)
-    show_my_reminders(call.message)
-
 @bot.callback_query_handler(func=lambda call: call.data == 'leave_family_confirm')
 def handle_leave_family_confirm(call):
     keyboard = types.InlineKeyboardMarkup(row_width=2)
@@ -443,9 +384,9 @@ def handle_family_members(call):
     try:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT user_id, role
-            FROM user_families
-            WHERE family_id = %s
+            SELECT uf.user_id, uf.role
+            FROM user_families uf
+            WHERE uf.family_id = %s
         """, (family_id,))
         members = cursor.fetchall()
         
@@ -465,6 +406,54 @@ def handle_family_members(call):
         bot.edit_message_text(response, call.message.chat.id, call.message.message_id, parse_mode='Markdown', reply_markup=get_main_menu_keyboard())
     except Exception as e:
         bot.edit_message_text(f"Произошла ошибка: {e}", call.message.chat.id, call.message.message_id)
+    finally:
+        conn.close()
+
+@bot.callback_query_handler(func=lambda call: call.data == 'edit_family_name')
+def handle_edit_family_name(call):
+    user_id = call.from_user.id
+    family_id = get_user_active_family_id(user_id)
+    
+    conn = get_db_connection()
+    if not conn:
+        bot.edit_message_text("Проблема с подключением к базе данных.", call.message.chat.id, call.message.message_id)
+        return
+    
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT role FROM user_families WHERE user_id = %s AND family_id = %s", (user_id, family_id))
+        user_role = cursor.fetchone()
+        
+        if user_role and user_role[0] == 'admin':
+            bot.edit_message_text("Введите новое название для вашей семьи:", call.message.chat.id, call.message.message_id)
+            bot.register_next_step_handler(call.message, edit_family_name_final)
+        else:
+            bot.edit_message_text("Только администратор семьи может изменить ее название.", call.message.chat.id, call.message.message_id, reply_markup=get_main_menu_keyboard())
+    except Exception as e:
+        bot.edit_message_text(f"Произошла ошибка: {e}", call.message.chat.id, call.message.message_id)
+    finally:
+        conn.close()
+
+def edit_family_name_final(message):
+    new_name = message.text.strip()
+    user_id = message.from_user.id
+    family_id = get_user_active_family_id(user_id)
+    
+    conn = get_db_connection()
+    if not conn:
+        bot.send_message(message.chat.id, "Проблема с подключением к базе данных.", reply_markup=get_main_menu_keyboard())
+        return
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE families SET name = %s WHERE id = %s",
+            (new_name, family_id)
+        )
+        conn.commit()
+        bot.send_message(message.chat.id, f"Название семьи успешно изменено на '{new_name}'.", reply_markup=get_main_menu_keyboard())
+    except Exception as e:
+        conn.rollback()
+        bot.send_message(message.chat.id, f"Произошла ошибка при изменении названия: {e}", reply_markup=get_main_menu_keyboard())
     finally:
         conn.close()
 
@@ -504,7 +493,7 @@ def handle_my_family_info(call):
     cursor = conn.cursor()
     try:
         cursor.execute("""
-            SELECT f.id, f.name, f.invite_code, f.subscription_end_date
+            SELECT f.id, f.name, f.invite_code
             FROM families f
             JOIN user_families uf ON f.id = uf.family_id
             WHERE uf.user_id = %s
@@ -517,23 +506,19 @@ def handle_my_family_info(call):
         if conn: conn.close()
     
     if family_info:
-        family_id, family_name, invite_code, sub_end_date = family_info
-        sub_status = "Активна" if sub_end_date and sub_end_date > datetime.now() else "Истекла"
-        sub_date_str = sub_end_date.strftime('%Y-%m-%d') if sub_end_date else "Не установлена"
+        family_id, family_name, invite_code = family_info
         
         message_text = (
             f"**Моя семья:**\n"
             f"Имя: {family_name}\n"
             f"ID: {family_id}\n"
             f"Код приглашения: `{invite_code}`\n"
-            f"Подписка: {sub_status} (до {sub_date_str})"
         )
         bot.edit_message_text(message_text, call.message.chat.id, call.message.message_id, parse_mode='Markdown', reply_markup=get_main_menu_keyboard())
     else:
         bot.edit_message_text("Вы пока не состоите ни в одной семье.", call.message.chat.id, call.message.message_id, reply_markup=get_main_menu_keyboard())
 
 # --- Команды администратора ---
-# Администратор теперь использует эту команду для добавления пользователей
 @bot.message_handler(commands=['add_member'])
 def handle_add_member(message):
     if message.from_user.id != ADMIN_USER_ID:
@@ -559,7 +544,6 @@ def handle_add_member(message):
     
     try:
         cursor = conn.cursor()
-        
         cursor.execute("SELECT COUNT(*) FROM user_families WHERE family_id = %s", (family_id,))
         member_count = cursor.fetchone()[0]
         if member_count >= 5:
@@ -583,50 +567,73 @@ def handle_add_member(message):
     finally:
         conn.close()
 
-# Обработчик, чтобы пользователи могли отправлять инвайт-коды напрямую
-@bot.message_handler(func=lambda message: True and len(message.text.split()) == 1 and len(message.text) == 8 and message.text.isalpha())
-def handle_invite_code_direct(message):
-    invite_code = message.text.strip()
-    user_id = message.from_user.id
+@bot.message_handler(commands=['get_invite_code'])
+def handle_get_invite_code(message):
+    if message.from_user.id != ADMIN_USER_ID:
+        bot.reply_to(message, "Эта команда доступна только администратору бота.")
+        return
+    
+    args = message.text.split()
+    if len(args) != 2:
+        bot.reply_to(message, "Использование: /get_invite_code [family_id]")
+        return
+    
+    try:
+        family_id = int(args[1])
+    except ValueError:
+        bot.reply_to(message, "Неверный формат family_id.")
+        return
     
     conn = get_db_connection()
     if not conn:
-        bot.send_message(message.chat.id, "Проблема с подключением к базе данных.")
+        bot.reply_to(message, "Проблема с подключением к базе данных.")
         return
+    
     try:
         cursor = conn.cursor()
-        # Проверка, что пользователь не состоит в семье
-        cursor.execute("SELECT 1 FROM user_families WHERE user_id = %s", (user_id,))
-        if cursor.fetchone():
-            bot.send_message(message.chat.id, "Вы уже состоите в семье. Чтобы присоединиться к новой, нужно сначала выйти из текущей.")
-            return
-
-        cursor.execute("SELECT id, name, owner_user_id FROM families WHERE invite_code = %s", (invite_code,))
-        family_info = cursor.fetchone()
+        cursor.execute("SELECT invite_code FROM families WHERE id = %s", (family_id,))
+        invite_code = cursor.fetchone()
         
-        if family_info:
-            family_id, family_name, owner_id = family_info
-            
-            cursor.execute("SELECT COUNT(*) FROM user_families WHERE family_id = %s", (family_id,))
-            member_count = cursor.fetchone()[0]
-            if member_count >= 5:
-                bot.send_message(message.chat.id, "Нельзя добавить больше 5 человек в эту семью.")
-                return
-
-            cursor.execute(
-                "INSERT INTO user_families (user_id, family_id, role) VALUES (%s, %s, 'member')",
-                (user_id, family_id)
-            )
-            conn.commit()
-            bot.send_message(message.chat.id, f"Добро пожаловать в семью '{family_name}'! 🎉", reply_markup=get_main_menu_keyboard())
+        if invite_code:
+            bot.reply_to(message, f"Код-приглашение для семьи {family_id}: `{invite_code[0]}`", parse_mode='Markdown')
         else:
-            bot.send_message(message.chat.id, "❌ Неверный код приглашения или такой семьи не существует. Попробуйте еще раз.")
+            bot.reply_to(message, f"Семья с ID {family_id} не найдена.")
     except Exception as e:
-        conn.rollback()
-        bot.send_message(message.chat.id, f"Произошла ошибка при присоединении к семье: {e}")
+        bot.reply_to(message, f"Произошла ошибка: {e}")
     finally:
         conn.close()
 
+@bot.message_handler(commands=['create_family'])
+def handle_create_family(message):
+    if message.from_user.id != ADMIN_USER_ID:
+        bot.reply_to(message, "Эта команда доступна только администратору бота.")
+        return
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        bot.reply_to(message, "Использование: /create_family [Название_семьи]")
+        return
+    family_name = args[1].strip()
+    conn = get_db_connection()
+    if not conn:
+        bot.reply_to(message, "Проблема с подключением к базе данных.")
+        return
+    try:
+        cursor = conn.cursor()
+        invite_code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+        cursor.execute(
+            "INSERT INTO families (name, owner_user_id, invite_code) VALUES (%s, %s, %s) RETURNING id",
+            (family_name, message.from_user.id, invite_code)
+        )
+        family_id = cursor.fetchone()[0]
+        bot.reply_to(message, f"Семья '{family_name}' (ID: {family_id}) создана. Код приглашения: `{invite_code}`.", parse_mode='Markdown')
+    except psycopg2.errors.UniqueViolation:
+        conn.rollback()
+        bot.reply_to(message, "Семья с таким названием уже существует.")
+    except Exception as e:
+        conn.rollback()
+        bot.reply_to(message, f"Произошла ошибка при создании семьи: {e}")
+    finally:
+        conn.close()
 
 @bot.message_handler(commands=['set_subscription'])
 def handle_set_subscription(message):
@@ -665,348 +672,46 @@ def handle_set_subscription(message):
     finally:
         conn.close()
 
-# --- Логика добавления регулярного платежа (пошаговый) ---
-def add_recurring_step2_title(message):
-    chat_id = message.chat.id
-    title = message.text.strip()
-    if not title:
-        bot.send_message(chat_id, "Название не может быть пустым. Отменил добавление.", reply_markup=get_main_menu_keyboard())
+@bot.message_handler(commands=['view_data'])
+def handle_view_data(message):
+    if message.from_user.id != ADMIN_USER_ID:
+        bot.reply_to(message, "Эта команда доступна только администратору бота.")
         return
-    bot.send_message(chat_id, f"Название: '{title}'. Теперь введите сумму и валюту (например, '50000 тг' или 'Неважно'):")
-    bot.register_next_step_handler(message, add_recurring_step3_amount, title)
-
-def add_recurring_step3_amount(message, title):
-    chat_id = message.chat.id
-    amount_text = message.text.strip().lower()
-    amount = None
-    currency = None
-    if amount_text != 'неважно':
-        match = re.search(r'(\d+[\s\d.,]*)([а-яА-ЯёЁa-zA-Z$₽]{1,4})?', amount_text)
-        if match:
-            try:
-                amount = float(match.group(1).replace(' ', '').replace(',', '.'))
-                currency_part = match.group(2).strip().lower() if match.group(2) else 'тг'
-                if currency_part in ['тг', 'kzt', 'тенге', '$', 'usd', 'руб', 'rub', '₽', 'eur']:
-                    currency = currency_part
-                else:
-                    currency = 'тг'
-            except ValueError:
-                pass
-        if amount is None:
-            bot.send_message(chat_id, "Не могу распознать сумму. Пожалуйста, введите корректную сумму (например, '50000 тг') или 'Неважно'. Отменил добавление.", reply_markup=get_main_menu_keyboard())
-            return
-    bot.send_message(chat_id, f"Сумма: {amount_text}. Теперь введите дату следующего платежа (ГГГГ-ММ-ДД, например, '2026-07-15'):")
-    bot.register_next_step_handler(message, add_recurring_step4_due_date, title, amount, currency)
-
-def add_recurring_step4_due_date(message, title, amount, currency):
-    chat_id = message.chat.id
-    due_date_str = message.text.strip()
-    try:
-        next_due_date = datetime.strptime(due_date_str, '%Y-%m-%d').date()
-    except ValueError:
-        bot.send_message(chat_id, "Неверный формат даты. Используйте ГГГГ-ММ-ДД. Отменил добавление.", reply_markup=get_main_menu_keyboard())
-        return
-    bot.send_message(chat_id, f"Дата платежа: {next_due_date.strftime('%Y-%m-%d')}. Теперь введите периодичность (например, 'год', 'месяц', 'неделя' или 'день'):")
-    bot.register_next_step_handler(message, add_recurring_step5_recurrence, title, amount, currency, next_due_date)
-
-def add_recurring_step5_recurrence(message, title, amount, currency, next_due_date):
-    chat_id = message.chat.id
-    recurrence_text = message.text.strip().lower()
-    recurrence_interval_unit = None
-    recurrence_interval_n = 1
-    match = re.search(r'(каждые\s*(\d+)\s*)?(.+)', recurrence_text)
-    if match:
-        n_str = match.group(2)
-        if n_str: recurrence_interval_n = int(n_str)
-        unit_text = match.group(3).strip()
-        if 'год' in unit_text: recurrence_interval_unit = 'YEAR'
-        elif 'месяц' in unit_text: recurrence_interval_unit = 'MONTH'
-        elif 'недел' in unit_text: recurrence_interval_unit = 'WEEK'
-        elif 'день' in unit_text: recurrence_interval_unit = 'DAY'
-    if recurrence_interval_unit is None:
-        bot.send_message(chat_id, "Не могу распознать периодичность. Попробуйте 'год', 'месяц', 'неделя', 'день' или 'каждые 2 месяца'. Отменил добавление.", reply_markup=get_main_menu_keyboard())
-        return
-    bot.send_message(chat_id, f"Периодичность: {message.text.strip()}. Теперь введите, за сколько дней до даты платежа напомнить (число, например, '7' для недели):")
-    bot.register_next_step_handler(message, add_recurring_step6_reminder_offset, 
-                                   title, amount, currency, next_due_date, 
-                                   recurrence_interval_unit, recurrence_interval_n)
-
-def add_recurring_step6_reminder_offset(message, title, amount, currency, next_due_date, recurrence_interval_unit, recurrence_interval_n):
-    chat_id = message.chat.id
-    reminder_offset_str = message.text.strip()
-    try:
-        reminder_offset_days = int(reminder_offset_str)
-        if reminder_offset_days < 0: raise ValueError
-    except ValueError:
-        bot.send_message(chat_id, "Неверный формат числа дней. Отменил добавление.", reply_markup=get_main_menu_keyboard())
-        return
-    user_id = message.from_user.id
-    family_id = get_user_active_family_id(user_id)
-    if family_id is None:
-        bot.send_message(chat_id, "Произошла ошибка: не удалось определить активную семью. Отменил добавление.", reply_markup=get_main_menu_keyboard())
-        return
-    conn = get_db_connection()
-    if not conn:
-        bot.send_message(chat_id, "Проблема с подключением к базе данных.", reply_markup=get_main_menu_keyboard())
-        return
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO recurring_payments (user_id, family_id, title, amount, currency, next_due_date, 
-                                            recurrence_interval_unit, recurrence_interval_n, reminder_offset_days)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (user_id, family_id, title, amount, currency, next_due_date, 
-             recurrence_interval_unit, recurrence_interval_n, reminder_offset_days)
-        )
-        conn.commit()
-        bot.send_message(chat_id, f"Регулярный платеж '{title}' добавлен! Напоминание придет за {reminder_offset_days} дней до {next_due_date.strftime('%Y-%m-%d')}.", reply_markup=get_main_menu_keyboard())
-    except Exception as e:
-        conn.rollback()
-        bot.send_message(chat_id, f"Произошла ошибка при сохранении напоминания: {e}", reply_markup=get_main_menu_keyboard())
-    finally:
-        if conn: conn.close()
-
-def show_my_reminders(message):
-    user_id = message.from_user.id
-    family_id = get_user_active_family_id(user_id)
-    conn = get_db_connection()
-    if not conn:
-        bot.send_message(message.chat.id, "Проблема с подключением к базе данных.", reply_markup=get_main_menu_keyboard())
-        return
-    try:
-        cursor = conn.cursor()
-        if family_id:
-            cursor.execute(
-                """
-                SELECT title, amount, currency, next_due_date, recurrence_interval_unit, recurrence_interval_n, reminder_offset_days
-                FROM recurring_payments
-                WHERE family_id = %s
-                ORDER BY next_due_date ASC
-                """,
-                (family_id,)
-            )
-        else:
-             cursor.execute(
-                """
-                SELECT title, amount, currency, next_due_date, recurrence_interval_unit, recurrence_interval_n, reminder_offset_days
-                FROM recurring_payments
-                WHERE user_id = %s AND family_id IS NULL
-                ORDER BY next_due_date ASC
-                """,
-                (user_id,)
-            )
-        reminders = cursor.fetchall()
-        if not reminders:
-            bot.send_message(message.chat.id, "У вас пока нет регулярных платежей или напоминаний.", reply_markup=get_main_menu_keyboard())
-            return
-        response_text = "Ваши регулярные платежи и напоминания:\n\n"
-        for r in reminders:
-            title, amount, currency, next_due_date, unit, n, offset = r
-            amount_str = f"{amount} {currency}" if amount else "Без суммы"
-            recurrence_str = f"каждые {n} {unit.lower()}" if n > 1 else unit.lower()
-            response_text += (f"🔹 **{title}**: Сумма: {amount_str}. Следующая дата: {next_due_date.strftime('%Y-%m-%d')}. "
-                              f"Повторяется: {recurrence_str}. Напоминать за {offset} дней.\n\n")
-        bot.send_message(message.chat.id, response_text, parse_mode='Markdown', reply_markup=get_main_menu_keyboard())
-    except Exception as e:
-        print(f"Ошибка при получении напоминаний: {e}")
-        bot.send_message(message.chat.id, "Произошла ошибка при получении ваших напоминаний.", reply_markup=get_main_menu_keyboard())
-    finally:
-        if conn: conn.close()
-
-def parse_date_period(text):
-    text_lower = text.lower()
-    start_date = None
-    end_date = datetime.now()
-    if 'сегодня' in text_lower:
-        start_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    elif 'неделя' in text_lower:
-        start_date = datetime.now() - timedelta(weeks=1)
-        start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
-    elif 'месяц' in text_lower:
-        start_date = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    elif 'год' in text_lower:
-        start_date = datetime.now().replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
-    elif 'с ' in text_lower and ' по ' in text_lower:
-        try:
-            date_from_match = re.search(r'с\s+(\d{1,2}[.]\d{1,2}(?:[.]\d{2,4})?)', text_lower)
-            date_to_match = re.search(r'по\s+(\d{1,2}[.]\d{1,2}(?:[.]\d{2,4})?)', text_lower)
-            if date_from_match and date_to_match:
-                date_from_str = date_from_match.group(1)
-                date_to_str = date_to_match.group(1)
-                for fmt in ["%d.%m.%Y", "%d.%m.%y", "%d.%m"]:
-                    try:
-                        start_date = datetime.strptime(date_from_str, fmt)
-                        if fmt == "%d.%m": start_date = start_date.replace(year=datetime.now().year)
-                        start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
-                        break
-                    except ValueError: pass
-                for fmt in ["%d.%m.%Y", "%d.%m.%y", "%d.%m"]:
-                    try:
-                        end_date = datetime.strptime(date_to_str, fmt)
-                        if fmt == "%d.%m": end_date = end_date.replace(year=datetime.now().year)
-                        end_date = end_date.replace(hour=23, minute=59, second=59, microsecond=999999)
-                        break
-                    except ValueError: pass
-        except Exception as e:
-            print(f"Ошибка парсинга диапазона дат: {e}")
-            start_date = None
-    else:
-        try:
-            month_map = {
-                'январь': 1, 'февраль': 2, 'март': 3, 'апрель': 4, 'май': 5, 'июнь': 6,
-                'июль': 7, 'август': 8, 'сентябрь': 9, 'октябрь': 10, 'ноябрь': 11, 'декабрь': 12
-            }
-            month_year_match = re.search(r'([а-яё]+)\s*(\d{4})', text_lower)
-            if month_year_match:
-                month_name = month_year_match.group(1)
-                year = int(month_year_match.group(2))
-                month_num = month_map.get(month_name)
-                if month_num:
-                    start_date = datetime(year, month_num, 1, 0, 0, 0, 0)
-                    if month_num == 12: end_date = datetime(year + 1, 1, 1, 0, 0, 0, 0) - timedelta(microseconds=1)
-                    else: end_date = datetime(year, month_num + 1, 1, 0, 0, 0, 0) - timedelta(microseconds=1)
-        except Exception as e:
-            print(f"Ошибка парсинга 'месяц год': {e}")
-            pass
-    return start_date, end_date
-
-# --- Хэндлер для текстовых сообщений (добавление расходов) ---
-@bot.message_handler(func=lambda message: True, content_types=['text'])
-def handle_text_messages(message):
-    user_id = message.from_user.id
-    family_id = get_user_active_family_id(user_id)
     
-    if message.text in ['💸 Добавить расход', '📊 Отчеты', '⏰ Напоминания', '👨‍👩‍👧‍👦 Семья']:
-        return
-
-    if family_id is None:
-        bot.send_message(message.chat.id, "Вы не состоите в активной семье. Для записи расходов вам нужно написать /start.", reply_markup=get_main_menu_keyboard())
-        return
-
-    text = message.text
-    match = re.search(r'(.+)\s+([\d\s.,]+)\s*([а-яА-ЯёЁa-zA-Z$₽]{1,4})?', text)
-    if match:
-        description = match.group(1).strip()
-        amount_str = match.group(2).strip().replace(' ', '').replace(',', '.')
-        currency_part = match.group(3).strip().lower() if match.group(3) else 'тг'
-        try:
-            amount = float(amount_str)
-            if currency_part in ['тг', 'kzt', 'тенге', '$', 'usd', 'руб', 'rub', '₽', 'eur']:
-                currency = currency_part
-            else:
-                currency = 'тг'
-            category = classify_expense(description)
-            
-            conn = get_db_connection()
-            if conn:
-                cursor = conn.cursor()
-                try:
-                    cursor.execute(
-                        "INSERT INTO expenses (user_id, family_id, amount, currency, description, category) VALUES (%s, %s, %s, %s, %s, %s)",
-                        (user_id, family_id, amount, currency, description, category)
-                    )
-                    conn.commit()
-                    bot.send_message(message.chat.id, f"✅ Расход '{description}' ({amount} {currency}) успешно добавлен в категорию '{category}'.", reply_markup=get_main_menu_keyboard())
-                except Exception as e:
-                    conn.rollback()
-                    bot.send_message(message.chat.id, f"Произошла ошибка при сохранении расхода: {e}", reply_markup=get_main_menu_keyboard())
-                finally:
-                    conn.close()
-                return
-            else:
-                bot.send_message(message.chat.id, "Проблема с подключением к базе данных.", reply_markup=get_main_menu_keyboard())
-                return
-        except ValueError:
-             bot.send_message(message.chat.id, "Не могу распознать сумму. Пожалуйста, используйте формат 'описание сумма валюта', например: 'хлеб 100тг'.", reply_markup=get_main_menu_keyboard())
-             return
-
-    # Обработка прямых инвайт-кодов
-    if len(text) == 8 and text.isalnum():
-        handle_invite_code_direct(message)
-    else:
-        bot.send_message(message.chat.id, "Не могу распознать расход. Пожалуйста, используйте формат 'описание сумма валюта', например: 'хлеб 100тг'.", reply_markup=get_main_menu_keyboard())
-
-
-# --- Фоновая задача для напоминаний ---
-def check_and_send_reminders():
-    print("Запускаю проверку напоминаний...")
     conn = get_db_connection()
     if not conn:
-        print("Не удалось подключиться к БД для проверки напоминаний.")
+        bot.reply_to(message, "Проблема с подключением к базе данных.")
         return
-    cursor = conn.cursor()
-    today = date.today()
+    
     try:
-        cursor.execute(
-            """
-            SELECT id, user_id, family_id, title, next_due_date, recurrence_interval_unit, recurrence_interval_n, reminder_offset_days, last_reminded_date
-            FROM recurring_payments
-            """
-        )
-        reminders = cursor.fetchall()
-        for r in reminders:
-            rp_id, user_id, family_id, title, next_due_date, unit, n, offset, last_reminded_date = r
-            days_until_due = (next_due_date - today).days
-            if days_until_due == offset:
-                if not last_reminded_date or last_reminded_date != today:
-                    message_text = (
-                        f"🔔 Напоминание: **'{title}'**\n"
-                        f"Следующий платеж: {next_due_date.strftime('%d.%m.%Y')}\n"
-                        f"До него осталось {offset} дней."
-                    )
-                    try:
-                        if family_id:
-                            cursor.execute("SELECT user_id FROM user_families WHERE family_id = %s", (family_id,))
-                            family_members = cursor.fetchall()
-                            for member_id in family_members:
-                                bot.send_message(member_id[0], message_text, parse_mode='Markdown')
-                        else:
-                            bot.send_message(user_id, message_text, parse_mode='Markdown')
-                        cursor.execute(
-                            "UPDATE recurring_payments SET last_reminded_date = %s WHERE id = %s",
-                            (today, rp_id)
-                        )
-                        conn.commit()
-                        print(f"Отправлено напоминание для {title} (ID: {rp_id})")
-                    except Exception as send_e:
-                        print(f"Ошибка при отправке напоминания для {title} (ID: {rp_id}): {send_e}")
-                        conn.rollback()
-            if next_due_date <= today and last_reminded_date == today:
-                new_due_date = next_due_date
-                if unit == 'YEAR': new_due_date = new_due_date.replace(year=new_due_date.year + n)
-                elif unit == 'MONTH':
-                    new_month = new_due_date.month + n
-                    new_year = new_due_date.year + (new_month - 1) // 12
-                    new_month = (new_month - 1) % 12 + 1
-                    new_due_date = new_due_date.replace(year=new_year, month=new_month)
-                elif unit == 'WEEK': new_due_date = new_due_date + timedelta(weeks=n)
-                elif unit == 'DAY': new_due_date = new_due_date + timedelta(days=n)
-                if new_due_date > next_due_date:
-                    cursor.execute(
-                        "UPDATE recurring_payments SET next_due_date = %s, last_reminded_date = NULL WHERE id = %s",
-                        (new_due_date, rp_id)
-                    )
-                    conn.commit()
-                    print(f"Дата следующего платежа для '{title}' сдвинута на {new_due_date.strftime('%Y-%m-%d')}")
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, name FROM families")
+        families = cursor.fetchall()
+        
+        family_info = "📊 **Информация по семьям:**\n\n"
+        for family in families:
+            family_id, family_name = family
+            family_info += f"**Семья ID {family_id}:** {family_name}\n"
+            
+            cursor.execute("SELECT user_id, role FROM user_families WHERE family_id = %s", (family_id,))
+            members = cursor.fetchall()
+            family_info += "  - **Члены:**\n"
+            for member in members:
+                user_id, role = member
+                try:
+                    user_chat = bot.get_chat(user_id)
+                    name = f"@{user_chat.username}" if user_chat.username else user_chat.first_name
+                except Exception:
+                    name = f"Пользователь {user_id}"
+                family_info += f"    - {name} ({role})\n"
+        
+        bot.reply_to(message, family_info, parse_mode='Markdown')
     except Exception as e:
-        print(f"Критическая ошибка при проверке напоминаний: {e}")
+        bot.reply_to(message, f"Произошла ошибка при получении данных: {e}")
     finally:
-        if conn: conn.close()
+        conn.close()
 
-# --- Настройка постоянного меню ---
-def set_commands():
-    commands = [
-        telebot.types.BotCommand("/start", "Перезапустить бота"),
-        telebot.types.BotCommand("/menu", "Показать главное меню"),
-        telebot.types.BotCommand("/report", "Получить отчет о расходах"),
-        telebot.types.BotCommand("/add_recurring", "Добавить регулярный платеж"),
-        telebot.types.BotCommand("/my_reminders", "Посмотреть мои напоминания")
-    ]
-    bot.set_my_commands(commands)
-    print("Команды бота установлены.")
-
+# --- Обработка прямых инвайт-кодов
 def handle_invite_code_direct(message):
     invite_code = message.text.strip()
     user_id = message.from_user.id
@@ -1047,18 +752,84 @@ def handle_invite_code_direct(message):
     finally:
         conn.close()
 
+# --- Хэндлер для текстовых сообщений (добавление расходов) ---
+@bot.message_handler(func=lambda message: True, content_types=['text'])
+def handle_text_messages(message):
+    user_id = message.from_user.id
+    family_id = get_user_active_family_id(user_id)
+    
+    # Обработка нажатий на кнопки
+    if message.text in ['💸 Добавить расход', '📊 Отчеты', '👨‍👩‍👧‍👦 Семья']:
+        return
+    
+    # Обработка инвайт-кодов, отправленных напрямую
+    if len(message.text) == 8 and message.text.isalnum():
+        handle_invite_code_direct(message)
+        return
 
-# --- Запуск бота и фоновой задачи ---
+    if family_id is None:
+        bot.send_message(message.chat.id, "Вы не состоите в активной семье. Для записи расходов вам нужно быть добавленным администратором. Напишите /start.", reply_markup=get_main_menu_keyboard())
+        return
+
+    text = message.text
+    # Новый парсер, который ищет несколько пар "описание сумма"
+    pattern = r'([\w\s]+)\s+([\d\s.,]+)'
+    matches = re.findall(pattern, text)
+    
+    if not matches:
+        bot.send_message(message.chat.id, "Не могу распознать расход. Пожалуйста, используйте формат 'описание сумма', например: 'хлеб 100, молоко 500'.", reply_markup=get_main_menu_keyboard())
+        return
+    
+    conn = get_db_connection()
+    if not conn:
+        bot.send_message(message.chat.id, "Проблема с подключением к базе данных.", reply_markup=get_main_menu_keyboard())
+        return
+
+    try:
+        for match in matches:
+            description = match[0].strip()
+            amount_str = match[1].strip().replace(' ', '').replace(',', '.')
+            
+            try:
+                amount = float(amount_str)
+                currency = 'тг' # Валюта по умолчанию, можно изменить
+                category = classify_expense(description)
+                
+                cursor = conn.cursor()
+                cursor.execute(
+                    "INSERT INTO expenses (user_id, family_id, amount, currency, description, category) VALUES (%s, %s, %s, %s, %s, %s)",
+                    (user_id, family_id, amount, currency, description, category)
+                )
+            except ValueError:
+                bot.send_message(message.chat.id, f"Не могу распознать сумму для '{description}'. Проверьте формат.", reply_markup=get_main_menu_keyboard())
+                conn.rollback()
+                return
+
+        conn.commit()
+        bot.send_message(message.chat.id, f"✅ Расходы успешно добавлены. Спасибо!", reply_markup=get_main_menu_keyboard())
+    except Exception as e:
+        conn.rollback()
+        bot.send_message(message.chat.id, f"Произошла ошибка при сохранении расхода: {e}", reply_markup=get_main_menu_keyboard())
+    finally:
+        conn.close()
+
+
+# --- Запуск бота ---
 if __name__ == '__main__':
     train_model(TRAINING_DATA)
     init_db()
-    set_commands()
     
-    # Для Railway Cron Job, этот блок должен быть в отдельном файле (reminder_worker.py)
-    # import threading
-    # reminder_thread = threading.Thread(target=check_and_send_reminders)
-    # reminder_thread.daemon = True
-    # reminder_thread.start()
-
+    # Настройка постоянного меню (по вашей идее)
+    commands = [
+        telebot.types.BotCommand("/start", "Перезапустить бота"),
+        telebot.types.BotCommand("/menu", "Показать главное меню"),
+        telebot.types.BotCommand("/report", "Получить отчет о расходах"),
+        telebot.types.BotCommand("/add_member", "Добавить участника (только админ)"),
+        telebot.types.BotCommand("/create_family", "Создать семью (только админ)"),
+        telebot.types.BotCommand("/set_subscription", "Установить подписку (только админ)"),
+        telebot.types.BotCommand("/view_data", "Просмотреть данные (только админ)"),
+    ]
+    bot.set_my_commands(commands)
+    
     print("Бот запущен и готов принимать сообщения...")
     bot.polling(none_stop=True)
