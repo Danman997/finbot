@@ -32,8 +32,6 @@ ADMIN_USER_ID = int(os.environ.get('ADMIN_USER_ID', '0'))
 vectorizer = TfidfVectorizer()
 classifier = LogisticRegression(max_iter=1000)
 
-# Расширенный тренировочный набор данных для обучения модели.
-# Я добавил больше примеров, чтобы улучшить точность классификации.
 TRAINING_DATA = [
     ("хлеб", "Еда"), ("молоко", "Еда"), ("яйца", "Еда"), ("фрукты", "Еда"),
     ("овощи", "Еда"), ("продукты", "Еда"), ("обед", "Еда"), ("ужин", "Еда"),
@@ -285,7 +283,6 @@ def handle_report_callback(call):
         bot.send_message(chat_id, "Введите свой период (например, 'с 01.01.2024 по 31.01.2024').", reply_markup=get_main_menu_keyboard())
         bot.register_next_step_handler(call.message, process_report_period_final)
     else:
-        # call.message.text = period_text # Чтобы process_report_period_final мог его обработать
         message = call.message
         message.text = period_text
         process_report_period_final(message)
@@ -313,15 +310,21 @@ def process_report_period_final(message):
         bot.send_message(chat_id, "Проблема с подключением к базе данных.", reply_markup=get_main_menu_keyboard())
         return
     
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT category, SUM(amount)
-        FROM expenses
-        WHERE family_id = %s AND timestamp BETWEEN %s AND %s
-        GROUP BY category
-    ''', (family_id, start_date, end_date))
-    data = cursor.fetchall()
-    conn.close()
+    try:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT category, SUM(amount)
+            FROM expenses
+            WHERE family_id = %s AND timestamp BETWEEN %s AND %s
+            GROUP BY category
+        ''', (family_id, start_date, end_date))
+        data = cursor.fetchall()
+    except Exception as e:
+        bot.send_message(chat_id, f"Произошла ошибка при получении отчета: {e}", reply_markup=get_main_menu_keyboard())
+        return
+    finally:
+        if conn: conn.close()
+
     if not data:
         bot.send_message(chat_id, "За выбранный период нет расходов.", reply_markup=get_main_menu_keyboard())
         return
@@ -359,6 +362,42 @@ def handle_join_family_start(call):
                           call.message.chat.id, call.message.message_id)
     bot.register_next_step_handler(call.message, handle_join_family)
 
+def handle_join_family(message):
+    args = message.text.split(maxsplit=1)
+    if len(args) < 1:
+        bot.reply_to(message, "Использование: /join_family [Код_приглашения]. Отменил.", reply_markup=get_main_menu_keyboard())
+        return
+    invite_code = args[0].strip()
+    user_id = message.from_user.id
+    
+    conn = get_db_connection()
+    if not conn:
+        bot.reply_to(message, "Проблема с подключением к базе данных.", reply_markup=get_main_menu_keyboard())
+        return
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, name FROM families WHERE invite_code = %s", (invite_code,))
+        family_info = cursor.fetchone()
+        if family_info:
+            family_id, family_name = family_info
+            cursor.execute("SELECT 1 FROM user_families WHERE user_id = %s AND family_id = %s", (user_id, family_id))
+            if cursor.fetchone():
+                bot.reply_to(message, f"Вы уже являетесь членом семьи '{family_name}'.", reply_markup=get_main_menu_keyboard())
+            else:
+                cursor.execute(
+                    "INSERT INTO user_families (user_id, family_id, role) VALUES (%s, %s, 'member')",
+                    (user_id, family_id)
+                )
+                conn.commit()
+                bot.reply_to(message, f"Вы успешно присоединились к семье '{family_name}'.", reply_markup=get_main_menu_keyboard())
+        else:
+            bot.reply_to(message, "Неверный код приглашения.", reply_markup=get_main_menu_keyboard())
+    except Exception as e:
+        conn.rollback()
+        bot.reply_to(message, f"Произошла ошибка при присоединении к семье: {e}", reply_markup=get_main_menu_keyboard())
+    finally:
+        if conn: conn.close()
+
 @bot.callback_query_handler(func=lambda call: call.data == 'my_family_info')
 def handle_my_family_info(call):
     user_id = call.from_user.id
@@ -367,14 +406,19 @@ def handle_my_family_info(call):
         bot.send_message(call.message.chat.id, "Проблема с подключением к базе данных.", reply_markup=get_main_menu_keyboard())
         return
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT f.id, f.name, f.invite_code, f.subscription_end_date
-        FROM families f
-        JOIN user_families uf ON f.id = uf.family_id
-        WHERE uf.user_id = %s
-    """, (user_id,))
-    family_info = cursor.fetchone()
-    conn.close()
+    try:
+        cursor.execute("""
+            SELECT f.id, f.name, f.invite_code, f.subscription_end_date
+            FROM families f
+            JOIN user_families uf ON f.id = uf.family_id
+            WHERE uf.user_id = %s
+        """, (user_id,))
+        family_info = cursor.fetchone()
+    except Exception as e:
+        bot.send_message(call.message.chat.id, f"Произошла ошибка: {e}", reply_markup=get_main_menu_keyboard())
+        return
+    finally:
+        if conn: conn.close()
     
     if family_info:
         family_id, family_name, invite_code, sub_end_date = family_info
@@ -680,7 +724,6 @@ def handle_text_messages(message):
     user_id = message.from_user.id
     family_id = get_user_active_family_id(user_id)
     
-    # Проверка, что сообщение не является командой меню
     if message.text in ['💸 Добавить расход', '📊 Отчеты', '⏰ Напоминания', '👨‍👩‍👧‍👦 Семья']:
         return # Игнорируем нажатия на кнопки, они обрабатываются в других хэндлерах
 
@@ -708,17 +751,25 @@ def handle_text_messages(message):
             conn = get_db_connection()
             if conn:
                 cursor = conn.cursor()
-                cursor.execute(
-                    "INSERT INTO expenses (user_id, family_id, amount, currency, description, category) VALUES (%s, %s, %s, %s, %s, %s)",
-                    (user_id, family_id, amount, currency, description, category)
-                )
-                conn.commit()
-                conn.close()
-                bot.send_message(message.chat.id, f"✅ Расход '{description}' ({amount} {currency}) успешно добавлен в категорию '{category}'.", reply_markup=get_main_menu_keyboard())
+                try:
+                    cursor.execute(
+                        "INSERT INTO expenses (user_id, family_id, amount, currency, description, category) VALUES (%s, %s, %s, %s, %s, %s)",
+                        (user_id, family_id, amount, currency, description, category)
+                    )
+                    conn.commit()
+                    bot.send_message(message.chat.id, f"✅ Расход '{description}' ({amount} {currency}) успешно добавлен в категорию '{category}'.", reply_markup=get_main_menu_keyboard())
+                except Exception as e:
+                    conn.rollback()
+                    bot.send_message(message.chat.id, f"Произошла ошибка при сохранении расхода: {e}", reply_markup=get_main_menu_keyboard())
+                finally:
+                    conn.close()
                 return
             else:
                 bot.send_message(message.chat.id, "Проблема с подключением к базе данных.", reply_markup=get_main_menu_keyboard())
                 return
+        except ValueError:
+             bot.send_message(message.chat.id, "Не могу распознать сумму. Пожалуйста, используйте формат 'описание сумма валюта', например: 'хлеб 100тг'.", reply_markup=get_main_menu_keyboard())
+             return
 
     bot.send_message(message.chat.id, "Не могу распознать расход. Пожалуйста, используйте формат 'описание сумма валюта', например: 'хлеб 100тг'.", reply_markup=get_main_menu_keyboard())
 
