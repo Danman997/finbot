@@ -182,6 +182,8 @@ def process_report_period_final(message):
     text = message.text.lower()
     
     start_date, end_date = parse_date_period(text)
+    # --- ОТЛАДКА: выводим user_id, start_date, end_date, текущее время ---
+    print(f"[DEBUG] Отчет: user_id={user_id}, start_date={start_date}, end_date={end_date}, now={datetime.now()}")
     if not start_date:
         bot.send_message(chat_id, "Не могу распознать период.", reply_markup=get_main_menu_keyboard())
         return
@@ -318,6 +320,9 @@ def handle_text_messages(message):
                 amount = float(amount_str)
                 currency = 'тг'
                 category = classify_expense(description)
+                
+                # --- ОТЛАДКА: выводим user_id, description, amount, текущее время ---
+                print(f"[DEBUG] Добавляю расход: user_id={user_id}, description='{description}', amount={amount}, category='{category}', timestamp={datetime.now()}")
                 
                 cursor = conn.cursor()
                 cursor.execute(
