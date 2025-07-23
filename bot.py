@@ -111,6 +111,18 @@ def init_db():
     conn = get_db_connection()
     if conn:
         cursor = conn.cursor()
+        # Проверяем, существует ли столбец family_id, и удаляем его, если он есть
+        try:
+            cursor.execute("ALTER TABLE expenses DROP COLUMN family_id;")
+            conn.commit()
+            print("Столбец family_id успешно удален из таблицы expenses.")
+        except psycopg2.errors.UndefinedColumn:
+            conn.rollback() # Откатываем транзакцию, если столбца не было
+            print("Столбец family_id не существует, ничего не делаем.")
+        except Exception as e:
+            conn.rollback()
+            print(f"Произошла ошибка при удалении столбца family_id: {e}")
+
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS expenses (
                 id SERIAL PRIMARY KEY,
@@ -182,8 +194,6 @@ def process_report_period_final(message):
     text = message.text.lower()
     
     start_date, end_date = parse_date_period(text)
-    # --- ОТЛАДКА: выводим user_id, start_date, end_date, текущее время ---
-    print(f"[DEBUG] Отчет: user_id={user_id}, start_date={start_date}, end_date={end_date}, now={datetime.now()}")
     if not start_date:
         bot.send_message(chat_id, "Не могу распознать период.", reply_markup=get_main_menu_keyboard())
         return
@@ -231,19 +241,21 @@ def parse_date_period(text):
     text_lower = text.lower()
     start_date = None
     end_date = datetime.now()
+    current_time_aware = datetime.now()
+
     if 'сегодня' in text_lower:
-        start_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        end_date = start_date + timedelta(days=1, microseconds=-1)
+        start_date = current_time_aware.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_date = current_time_aware
     elif 'неделя' in text_lower:
-        start_date = datetime.now() - timedelta(weeks=1)
+        start_date = current_time_aware - timedelta(weeks=1)
         start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
-        end_date = datetime.now()
+        end_date = current_time_aware
     elif 'месяц' in text_lower:
-        start_date = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        end_date = datetime.now()
+        start_date = current_time_aware.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        end_date = current_time_aware
     elif 'год' in text_lower:
-        start_date = datetime.now().replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
-        end_date = datetime.now()
+        start_date = current_time_aware.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        end_date = current_time_aware
     elif 'с ' in text_lower and ' по ' in text_lower:
         try:
             date_from_match = re.search(r'с\s+(\d{1,2}[.]\d{1,2}(?:[.]\d{2,4})?)', text_lower)
@@ -268,24 +280,6 @@ def parse_date_period(text):
         except Exception as e:
             print(f"Ошибка парсинга диапазона дат: {e}")
             start_date = None
-    else:
-        try:
-            month_map = {
-                'январь': 1, 'февраль': 2, 'март': 3, 'апрель': 4, 'май': 5, 'июнь': 6,
-                'июль': 7, 'август': 8, 'сентябрь': 9, 'октябрь': 10, 'ноябрь': 11, 'декабрь': 12
-            }
-            month_year_match = re.search(r'([а-яё]+)\s*(\d{4})', text_lower)
-            if month_year_match:
-                month_name = month_year_match.group(1)
-                year = int(month_year_match.group(2))
-                month_num = month_map.get(month_name)
-                if month_num:
-                    start_date = datetime(year, month_num, 1, 0, 0, 0, 0)
-                    if month_num == 12: end_date = datetime(year + 1, 1, 1, 0, 0, 0, 0) - timedelta(microseconds=1)
-                    else: end_date = datetime(year, month_num + 1, 1, 0, 0, 0, 0) - timedelta(microseconds=1)
-        except Exception as e:
-            print(f"Ошибка парсинга 'месяц год': {e}")
-            pass
     return start_date, end_date
 
 
@@ -320,9 +314,6 @@ def handle_text_messages(message):
                 amount = float(amount_str)
                 currency = 'тг'
                 category = classify_expense(description)
-                
-                # --- ОТЛАДКА: выводим user_id, description, amount, текущее время ---
-                print(f"[DEBUG] Добавляю расход: user_id={user_id}, description='{description}', amount={amount}, category='{category}', timestamp={datetime.now()}")
                 
                 cursor = conn.cursor()
                 cursor.execute(
