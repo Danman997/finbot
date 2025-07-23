@@ -14,7 +14,7 @@ import random
 import string
 from dotenv import load_dotenv
 
-# Загружаем переменные окружения из .env файла для локальной разработки
+# Загружаем переменные окружения из .env файла
 load_dotenv()
 
 # --- Настройки бота ---
@@ -29,7 +29,6 @@ if not DATABASE_URL:
     print("Ошибка: URL базы данных не найден. Установите переменную окружения DATABASE_URL.")
     exit()
 
-# Используйте ваш ID Telegram в качестве ID администратора
 ADMIN_USER_ID = 498410375
 
 # --- Модель классификации (scikit-learn) ---
@@ -649,106 +648,6 @@ def handle_view_data(message):
         bot.reply_to(message, family_info, parse_mode='Markdown')
     except Exception as e:
         bot.reply_to(message, f"Произошла ошибка при получении данных: {e}")
-    finally:
-        conn.close()
-
-# --- Обработка прямых инвайт-кодов
-def handle_invite_code_direct(message):
-    invite_code = message.text.strip()
-    user_id = message.from_user.id
-    
-    conn = get_db_connection()
-    if not conn:
-        bot.send_message(message.chat.id, "Проблема с подключением к базе данных.", reply_markup=get_main_menu_keyboard())
-        return
-    try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT 1 FROM user_families WHERE user_id = %s", (user_id,))
-        if cursor.fetchone():
-            bot.send_message(message.chat.id, "Вы уже состоите в семье. Чтобы присоединиться к новой, нужно сначала выйти из текущей.", reply_markup=get_main_menu_keyboard())
-            return
-        
-        cursor.execute("SELECT id, name FROM families WHERE invite_code = %s", (invite_code,))
-        family_info = cursor.fetchone()
-        
-        if family_info:
-            family_id, family_name = family_info
-            cursor.execute("SELECT COUNT(*) FROM user_families WHERE family_id = %s", (family_id,))
-            member_count = cursor.fetchone()[0]
-            if member_count >= 5:
-                bot.send_message(message.chat.id, "Нельзя добавить больше 5 человек в эту семью.", reply_markup=get_main_menu_keyboard())
-                return
-
-            cursor.execute(
-                "INSERT INTO user_families (user_id, family_id, role) VALUES (%s, %s, 'member')",
-                (user_id, family_id)
-            )
-            conn.commit()
-            bot.send_message(message.chat.id, f"Добро пожаловать в семью '{family_name}'! 🎉", reply_markup=get_main_menu_keyboard())
-        else:
-            bot.send_message(message.chat.id, "❌ Неверный код приглашения или такой семьи не существует. Попробуйте еще раз.", reply_markup=get_main_menu_keyboard())
-    except Exception as e:
-        conn.rollback()
-        bot.send_message(message.chat.id, f"Произошла ошибка при присоединении к семье: {e}", reply_markup=get_main_menu_keyboard())
-    finally:
-        conn.close()
-
-# --- Хэндлер для текстовых сообщений (добавление расходов) ---
-@bot.message_handler(func=lambda message: True, content_types=['text'])
-def handle_text_messages(message):
-    user_id = message.from_user.id
-    family_id = get_user_active_family_id(user_id)
-    
-    if message.text in ['💸 Добавить расход', '📊 Отчеты', '👨‍👩‍👧‍👦 Семья']:
-        return
-    
-    if family_id is None:
-        bot.send_message(message.chat.id, "Вы не состоите в активной семье. Для записи расходов вам нужно быть добавленным администратором. Напишите /start.", reply_markup=get_main_menu_keyboard())
-        return
-
-    text = message.text
-    pattern = r'([\w\s]+)\s+([\d\s.,]+)(?:тг)?'
-    matches = re.findall(pattern, text, re.IGNORECASE)
-    
-    if not matches:
-        bot.send_message(message.chat.id, "Не могу распознать расход. Пожалуйста, используйте формат 'описание сумма', например: 'хлеб 100, молоко 500'.", reply_markup=get_main_menu_keyboard())
-        return
-    
-    conn = get_db_connection()
-    if not conn:
-        bot.send_message(message.chat.id, "Проблема с подключением к базе данных.", reply_markup=get_main_menu_keyboard())
-        return
-
-    try:
-        success_count = 0
-        table_name = get_expense_table_name(family_id)
-
-        for match in matches:
-            description = match[0].strip()
-            amount_str = match[1].strip().replace(' ', '').replace(',', '.')
-            
-            try:
-                amount = float(amount_str)
-                currency = 'тг'
-                category = classify_expense(description)
-                
-                cursor = conn.cursor()
-                cursor.execute(
-                    f"INSERT INTO {table_name} (user_id, amount, currency, description, category) VALUES (%s, %s, %s, %s, %s)",
-                    (user_id, amount, currency, description, category)
-                )
-                success_count += 1
-            except ValueError:
-                bot.send_message(message.chat.id, f"Не могу распознать сумму для '{description}'. Проверьте формат.", reply_markup=get_main_menu_keyboard())
-                conn.rollback()
-                return
-
-        conn.commit()
-        if success_count > 0:
-            bot.send_message(message.chat.id, f"✅ Успешно добавлено {success_count} расходов.", reply_markup=get_main_menu_keyboard())
-    except Exception as e:
-        conn.rollback()
-        bot.send_message(message.chat.id, f"Произошла ошибка при сохранении расхода: {e}", reply_markup=get_main_menu_keyboard())
     finally:
         conn.close()
 
