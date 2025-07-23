@@ -37,7 +37,7 @@ TRAINING_DATA = [
     ("овощи", "Еда"), ("продукты", "Еда"), ("обед", "Еда"), ("ужин", "Еда"),
     ("кофе", "Еда"), ("сок", "Еда"), ("чай", "Еда"), ("вода", "Еда"),
     ("булочка", "Еда"), ("пицца", "Еда"), ("рыба", "Еда"), ("мясо", "Еда"),
-    ("колбаса", "Еда"), ("сыр", "Еда"), ("Еда"), ("картошка", "Еда"),
+    ("колбаса", "Еда"), ("сыр", "Еда"), ("рис", "Еда"), ("картошка", "Еда"),
     ("сладости", "Еда"), ("конфеты", "Еда"), ("шоколад", "Еда"), ("кефир", "Еда"),
     ("сметана", "Еда"), ("йогурт", "Еда"), ("салат", "Еда"), ("мороженое", "Еда"),
     ("завтрак", "Еда"), ("ланч", "Еда"),
@@ -167,12 +167,17 @@ def get_user_active_family_id(user_id):
     conn = get_db_connection()
     if not conn: return None
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT family_id FROM user_families WHERE user_id = %s ORDER BY family_id LIMIT 1
-    """, (user_id,))
-    family_id = cursor.fetchone()
-    conn.close()
-    return family_id[0] if family_id else None
+    try:
+        cursor.execute("""
+            SELECT family_id FROM user_families WHERE user_id = %s ORDER BY family_id LIMIT 1
+        """, (user_id,))
+        family_id = cursor.fetchone()
+        return family_id[0] if family_id else None
+    except Exception as e:
+        print(f"Ошибка при получении family_id: {e}")
+        return None
+    finally:
+        conn.close()
 
 def is_family_subscription_active(family_id):
     if not family_id:
@@ -180,16 +185,21 @@ def is_family_subscription_active(family_id):
     conn = get_db_connection()
     if not conn: return False
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT subscription_end_date, is_active FROM families WHERE id = %s",
-        (family_id,)
-    )
-    result = cursor.fetchone()
-    conn.close()
-    if result:
-        end_date, active_flag = result
-        return active_flag and end_date and end_date > datetime.now()
-    return False
+    try:
+        cursor.execute(
+            "SELECT subscription_end_date, is_active FROM families WHERE id = %s",
+            (family_id,)
+        )
+        result = cursor.fetchone()
+        if result:
+            end_date, active_flag = result
+            return active_flag and end_date and end_date > datetime.now()
+        return False
+    except Exception as e:
+        print(f"Ошибка при проверке подписки: {e}")
+        return False
+    finally:
+        conn.close()
 
 # --- UI (User Interface) ---
 def get_main_menu_keyboard():
@@ -220,12 +230,12 @@ def send_welcome(message):
         bot.reply_to(message, "Проблема с подключением к базе данных.", reply_markup=get_main_menu_keyboard())
         return
     cursor = conn.cursor()
-    cursor.execute("SELECT 1 FROM user_families WHERE user_id = %s", (user_id,))
-    is_registered = cursor.fetchone()
-    
-    if not is_registered:
-        try:
-            family_name = f"Одиночный_{user_id}"
+    try:
+        cursor.execute("SELECT 1 FROM user_families WHERE user_id = %s", (user_id,))
+        is_registered = cursor.fetchone()
+        
+        if not is_registered:
+            family_name = f"Семья_{user_id}"
             invite_code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
             cursor.execute(
                 "INSERT INTO families (name, owner_user_id, invite_code) VALUES (%s, %s, %s) RETURNING id",
@@ -237,20 +247,19 @@ def send_welcome(message):
                 (user_id, family_id)
             )
             conn.commit()
-            bot.reply_to(message, "Привет! Ты был автоматически зарегистрирован в одиночной семье. "
+            bot.reply_to(message, "Привет! Ты был автоматически зарегистрирован. "
                                    "Теперь ты можешь добавлять расходы и смотреть отчеты. "
                                    "Если захочешь пригласить других, используй меню 'Семья'.", reply_markup=get_main_menu_keyboard())
-        except psycopg2.errors.UniqueViolation:
-            conn.rollback()
-            bot.reply_to(message, "Вы уже зарегистрированы. Выбери опцию ниже:", reply_markup=get_main_menu_keyboard())
-        except Exception as e:
-            conn.rollback()
-            bot.reply_to(message, f"Произошла ошибка при регистрации: {e}")
-        finally:
-            conn.close()
-    else:
+        else:
+            bot.reply_to(message, "С возвращением! Выбери опцию ниже:", reply_markup=get_main_menu_keyboard())
+    except psycopg2.errors.UniqueViolation:
+        conn.rollback()
+        bot.reply_to(message, "Вы уже зарегистрированы. Выбери опцию ниже:", reply_markup=get_main_menu_keyboard())
+    except Exception as e:
+        conn.rollback()
+        bot.reply_to(message, f"Произошла ошибка при регистрации: {e}")
+    finally:
         conn.close()
-        bot.reply_to(message, "С возвращением! Выбери опцию ниже:", reply_markup=get_main_menu_keyboard())
 
 # --- Основные хэндлеры для меню ---
 @bot.message_handler(regexp='^💸 Добавить расход$')
@@ -258,7 +267,7 @@ def handle_add_expense_menu(message):
     user_id = message.from_user.id
     family_id = get_user_active_family_id(user_id)
     if family_id is None:
-        bot.send_message(message.chat.id, "Вы не состоите в активной семье. Для записи расходов вам нужно создать семью (админ) или присоединиться к существующей. Напишите /start.", reply_markup=get_main_menu_keyboard())
+        bot.send_message(message.chat.id, "Вы не состоите в активной семье. Для записи расходов вам нужно написать /start.", reply_markup=get_main_menu_keyboard())
         return
     bot.send_message(message.chat.id, "Отлично! Просто напиши 'описание сумма валюта', например: 'хлеб 100тг'.", reply_markup=types.ReplyKeyboardRemove())
 
@@ -267,7 +276,7 @@ def handle_report_menu(message):
     user_id = message.from_user.id
     family_id = get_user_active_family_id(user_id)
     if family_id is None:
-        bot.send_message(message.chat.id, "Вы не состоите в активной семье. Для получения отчетов нужна семья.", reply_markup=get_main_menu_keyboard())
+        bot.send_message(message.chat.id, "Вы не состоите в активной семье. Для получения отчетов нужна семья. Напишите /start.", reply_markup=get_main_menu_keyboard())
         return
     bot.send_message(message.chat.id, "За какой период вы хотите отчет?", reply_markup=get_report_period_keyboard())
 
@@ -276,7 +285,7 @@ def handle_reminders_menu(message):
     user_id = message.from_user.id
     family_id = get_user_active_family_id(user_id)
     if family_id is None:
-        bot.send_message(message.chat.id, "Вы не состоите в активной семье. Для управления напоминаниями нужна семья.", reply_markup=get_main_menu_keyboard())
+        bot.send_message(message.chat.id, "Вы не состоите в активной семье. Для управления напоминаниями нужна семья. Напишите /start.", reply_markup=get_main_menu_keyboard())
         return
     
     keyboard = types.InlineKeyboardMarkup(row_width=1)
@@ -290,14 +299,15 @@ def handle_family_menu(message):
     user_id = message.from_user.id
     family_id = get_user_active_family_id(user_id)
     if family_id is None:
-        bot.send_message(message.chat.id, "Вы пока не состоите ни в одной семье.", reply_markup=get_main_menu_keyboard())
+        bot.send_message(message.chat.id, "Вы пока не состоите ни в одной семье. Напишите /start.", reply_markup=get_main_menu_keyboard())
         return
     
     keyboard = types.InlineKeyboardMarkup(row_width=1)
     btn1 = types.InlineKeyboardButton("📝 Информация о семье", callback_data='my_family_info')
     btn2 = types.InlineKeyboardButton("🚶 Выйти из семьи", callback_data='leave_family_confirm')
     btn3 = types.InlineKeyboardButton("👥 Члены семьи", callback_data='family_members')
-    keyboard.add(btn1, btn2, btn3)
+    btn4 = types.InlineKeyboardButton("🔗 Пригласить в семью", callback_data='invite_member')
+    keyboard.add(btn1, btn2, btn3, btn4)
     bot.send_message(message.chat.id, "Что вы хотите сделать с семьей?", reply_markup=keyboard)
 
 # --- Callback хэндлеры для кнопок ---
@@ -307,7 +317,7 @@ def handle_report_callback(call):
     user_id = call.from_user.id
     period_text = call.data.replace('report_', '')
     
-    bot.edit_message_reply_markup(chat_id, call.message.message_id) # Удаляем кнопки
+    bot.edit_message_reply_markup(chat_id, call.message.message_id)
     
     if period_text == 'другой':
         bot.send_message(chat_id, "Введите свой период (например, 'с 01.01.2024 по 31.01.2024').", reply_markup=get_main_menu_keyboard())
@@ -407,7 +417,7 @@ def handle_leave_family_yes(call):
         cursor = conn.cursor()
         cursor.execute("DELETE FROM user_families WHERE user_id = %s AND family_id = %s", (user_id, family_id))
         conn.commit()
-        bot.edit_message_text("Вы успешно вышли из семьи. Чтобы снова добавлять расходы, вам нужно написать /start.", call.message.chat.id, call.message.message_id, reply_markup=get_onboarding_keyboard())
+        bot.edit_message_text("Вы успешно вышли из семьи. Чтобы снова добавлять расходы, вам нужно написать /start.", call.message.chat.id, call.message.message_id, reply_markup=get_main_menu_keyboard())
     except Exception as e:
         conn.rollback()
         bot.edit_message_text(f"Произошла ошибка при выходе из семьи: {e}", call.message.chat.id, call.message.message_id)
@@ -442,8 +452,6 @@ def handle_family_members(call):
         response = "👥 **Члены вашей семьи:**\n\n"
         for member in members:
             member_id, role = member
-            # Для отображения имени, мы будем использовать метод get_chat. Это не очень эффективно
-            # и может быть медленно, но для небольшой семьи это подойдет.
             try:
                 member_chat = bot.get_chat(member_id)
                 name = member_chat.first_name if member_chat.first_name else f"Пользователь {member_id}"
@@ -457,6 +465,31 @@ def handle_family_members(call):
         bot.edit_message_text(response, call.message.chat.id, call.message.message_id, parse_mode='Markdown', reply_markup=get_main_menu_keyboard())
     except Exception as e:
         bot.edit_message_text(f"Произошла ошибка: {e}", call.message.chat.id, call.message.message_id)
+    finally:
+        conn.close()
+
+@bot.callback_query_handler(func=lambda call: call.data == 'invite_member')
+def handle_invite_member(call):
+    user_id = call.from_user.id
+    family_id = get_user_active_family_id(user_id)
+    
+    conn = get_db_connection()
+    if not conn:
+        bot.edit_message_text("Проблема с подключением к базе данных.", call.message.chat.id, call.message.message_id)
+        return
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT invite_code FROM families WHERE id = %s", (family_id,))
+        invite_code = cursor.fetchone()[0]
+        
+        bot.edit_message_text(
+            f"🔗 Чтобы пригласить человека, отправьте ему этот код: `{invite_code}`\n\n"
+            f"Для присоединения ему нужно будет просто отправить этот код боту.",
+            call.message.chat.id, call.message.message_id, parse_mode='Markdown'
+        )
+    except Exception as e:
+        bot.edit_message_text(f"Произошла ошибка при получении кода: {e}", call.message.chat.id, call.message.message_id)
     finally:
         conn.close()
 
@@ -493,6 +526,7 @@ def handle_my_family_info(call):
             f"Имя: {family_name}\n"
             f"ID: {family_id}\n"
             f"Код приглашения: `{invite_code}`\n"
+            f"Подписка: {sub_status} (до {sub_date_str})"
         )
         bot.edit_message_text(message_text, call.message.chat.id, call.message.message_id, parse_mode='Markdown', reply_markup=get_main_menu_keyboard())
     else:
@@ -546,6 +580,50 @@ def handle_add_member(message):
     except Exception as e:
         conn.rollback()
         bot.reply_to(message, f"Произошла ошибка при добавлении пользователя: {e}")
+    finally:
+        conn.close()
+
+# Обработчик, чтобы пользователи могли отправлять инвайт-коды напрямую
+@bot.message_handler(func=lambda message: True and len(message.text.split()) == 1 and len(message.text) == 8 and message.text.isalpha())
+def handle_invite_code_direct(message):
+    invite_code = message.text.strip()
+    user_id = message.from_user.id
+    
+    conn = get_db_connection()
+    if not conn:
+        bot.send_message(message.chat.id, "Проблема с подключением к базе данных.")
+        return
+    try:
+        cursor = conn.cursor()
+        # Проверка, что пользователь не состоит в семье
+        cursor.execute("SELECT 1 FROM user_families WHERE user_id = %s", (user_id,))
+        if cursor.fetchone():
+            bot.send_message(message.chat.id, "Вы уже состоите в семье. Чтобы присоединиться к новой, нужно сначала выйти из текущей.")
+            return
+
+        cursor.execute("SELECT id, name, owner_user_id FROM families WHERE invite_code = %s", (invite_code,))
+        family_info = cursor.fetchone()
+        
+        if family_info:
+            family_id, family_name, owner_id = family_info
+            
+            cursor.execute("SELECT COUNT(*) FROM user_families WHERE family_id = %s", (family_id,))
+            member_count = cursor.fetchone()[0]
+            if member_count >= 5:
+                bot.send_message(message.chat.id, "Нельзя добавить больше 5 человек в эту семью.")
+                return
+
+            cursor.execute(
+                "INSERT INTO user_families (user_id, family_id, role) VALUES (%s, %s, 'member')",
+                (user_id, family_id)
+            )
+            conn.commit()
+            bot.send_message(message.chat.id, f"Добро пожаловать в семью '{family_name}'! 🎉", reply_markup=get_main_menu_keyboard())
+        else:
+            bot.send_message(message.chat.id, "❌ Неверный код приглашения или такой семьи не существует. Попробуйте еще раз.")
+    except Exception as e:
+        conn.rollback()
+        bot.send_message(message.chat.id, f"Произошла ошибка при присоединении к семье: {e}")
     finally:
         conn.close()
 
@@ -844,7 +922,12 @@ def handle_text_messages(message):
              bot.send_message(message.chat.id, "Не могу распознать сумму. Пожалуйста, используйте формат 'описание сумма валюта', например: 'хлеб 100тг'.", reply_markup=get_main_menu_keyboard())
              return
 
-    bot.send_message(message.chat.id, "Не могу распознать расход. Пожалуйста, используйте формат 'описание сумма валюта', например: 'хлеб 100тг'.", reply_markup=get_main_menu_keyboard())
+    # Обработка прямых инвайт-кодов
+    if len(text) == 8 and text.isalnum():
+        handle_invite_code_direct(message)
+    else:
+        bot.send_message(message.chat.id, "Не могу распознать расход. Пожалуйста, используйте формат 'описание сумма валюта', например: 'хлеб 100тг'.", reply_markup=get_main_menu_keyboard())
+
 
 # --- Фоновая задача для напоминаний ---
 def check_and_send_reminders():
@@ -923,6 +1006,47 @@ def set_commands():
     ]
     bot.set_my_commands(commands)
     print("Команды бота установлены.")
+
+def handle_invite_code_direct(message):
+    invite_code = message.text.strip()
+    user_id = message.from_user.id
+    
+    conn = get_db_connection()
+    if not conn:
+        bot.send_message(message.chat.id, "Проблема с подключением к базе данных.", reply_markup=get_main_menu_keyboard())
+        return
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1 FROM user_families WHERE user_id = %s", (user_id,))
+        if cursor.fetchone():
+            bot.send_message(message.chat.id, "Вы уже состоите в семье. Чтобы присоединиться к новой, нужно сначала выйти из текущей.", reply_markup=get_main_menu_keyboard())
+            return
+        
+        cursor.execute("SELECT id, name FROM families WHERE invite_code = %s", (invite_code,))
+        family_info = cursor.fetchone()
+        
+        if family_info:
+            family_id, family_name = family_info
+            cursor.execute("SELECT COUNT(*) FROM user_families WHERE family_id = %s", (family_id,))
+            member_count = cursor.fetchone()[0]
+            if member_count >= 5:
+                bot.send_message(message.chat.id, "Нельзя добавить больше 5 человек в эту семью.", reply_markup=get_main_menu_keyboard())
+                return
+
+            cursor.execute(
+                "INSERT INTO user_families (user_id, family_id, role) VALUES (%s, %s, 'member')",
+                (user_id, family_id)
+            )
+            conn.commit()
+            bot.send_message(message.chat.id, f"Добро пожаловать в семью '{family_name}'! 🎉", reply_markup=get_main_menu_keyboard())
+        else:
+            bot.send_message(message.chat.id, "❌ Неверный код приглашения или такой семьи не существует. Попробуйте еще раз.", reply_markup=get_main_menu_keyboard())
+    except Exception as e:
+        conn.rollback()
+        bot.send_message(message.chat.id, f"Произошла ошибка при присоединении к семье: {e}", reply_markup=get_main_menu_keyboard())
+    finally:
+        conn.close()
+
 
 # --- Запуск бота и фоновой задачи ---
 if __name__ == '__main__':
