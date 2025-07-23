@@ -10,12 +10,11 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 import numpy as np
 import re
-import time
 import random
 import string
 from dotenv import load_dotenv
 
-# Загружаем переменные окружения из .env файла
+# Загружаем переменные окружения из .env файла для локальной разработки
 load_dotenv()
 
 # --- Настройки бота ---
@@ -118,18 +117,6 @@ def init_db():
     if conn:
         cursor = conn.cursor()
         cursor.execute('''
-            CREATE TABLE IF NOT EXISTS expenses (
-                id SERIAL PRIMARY KEY,
-                user_id BIGINT,
-                family_id INTEGER,
-                amount REAL,
-                currency TEXT,
-                description TEXT,
-                category TEXT,
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        ''')
-        cursor.execute('''
             CREATE TABLE IF NOT EXISTS families (
                 id SERIAL PRIMARY KEY,
                 name TEXT UNIQUE NOT NULL,
@@ -151,6 +138,25 @@ def init_db():
         conn.close()
         print("База данных инициализирована (таблицы проверены/созданы).")
 
+def get_expense_table_name(family_id):
+    return f"expenses_family_{family_id}"
+
+def create_expense_table(family_id, conn):
+    cursor = conn.cursor()
+    table_name = get_expense_table_name(family_id)
+    cursor.execute(f'''
+        CREATE TABLE IF NOT EXISTS {table_name} (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT,
+            amount REAL,
+            currency TEXT,
+            description TEXT,
+            category TEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    ''')
+    conn.commit()
+
 # --- Вспомогательные функции ---
 def get_user_active_family_id(user_id):
     conn = get_db_connection()
@@ -166,7 +172,7 @@ def get_user_active_family_id(user_id):
         print(f"Ошибка при получении family_id: {e}")
         return None
     finally:
-        conn.close()
+        if conn: conn.close()
 
 def is_user_registered(user_id):
     conn = get_db_connection()
@@ -197,7 +203,7 @@ def is_family_subscription_active(family_id):
         print(f"Ошибка при проверке подписки: {e}")
         return False
     finally:
-        conn.close()
+        if conn: conn.close()
 
 # --- UI (User Interface) ---
 def get_main_menu_keyboard():
@@ -300,14 +306,15 @@ def process_report_period_final(message):
         bot.send_message(chat_id, "Проблема с подключением к базе данных.", reply_markup=get_main_menu_keyboard())
         return
     
+    table_name = get_expense_table_name(family_id)
     try:
         cursor = conn.cursor()
-        cursor.execute('''
+        cursor.execute(f'''
             SELECT category, SUM(amount)
-            FROM expenses
-            WHERE family_id = %s AND timestamp BETWEEN %s AND %s
+            FROM {table_name}
+            WHERE timestamp BETWEEN %s AND %s
             GROUP BY category
-        ''', (family_id, start_date, end_date))
+        ''', (start_date, end_date))
         data = cursor.fetchall()
     except Exception as e:
         bot.send_message(chat_id, f"Произошла ошибка при получении отчета: {e}", reply_markup=get_main_menu_keyboard())
@@ -482,7 +489,6 @@ def handle_invite_member(call):
     finally:
         conn.close()
 
-
 @bot.callback_query_handler(func=lambda call: call.data == 'my_family_info')
 def handle_my_family_info(call):
     user_id = call.from_user.id
@@ -519,22 +525,22 @@ def handle_my_family_info(call):
         bot.edit_message_text("Вы пока не состоите ни в одной семье.", call.message.chat.id, call.message.message_id, reply_markup=get_main_menu_keyboard())
 
 # --- Команды администратора ---
-@bot.message_handler(commands=['add_member'])
-def handle_add_member(message):
+@bot.message_handler(commands=['add_user'])
+def handle_add_user(message):
     if message.from_user.id != ADMIN_USER_ID:
         bot.reply_to(message, "Эта команда доступна только администратору бота.")
         return
     
-    args = message.text.split()
+    args = message.text.split(maxsplit=2)
     if len(args) != 3:
-        bot.reply_to(message, "Использование: /add_member [user_id] [family_id]")
+        bot.reply_to(message, "Использование: /add_user [user_id] [Имя_семьи]")
         return
     
     try:
         target_user_id = int(args[1])
-        family_id = int(args[2])
+        family_name = args[2].strip()
     except ValueError:
-        bot.reply_to(message, "Неверный формат user_id или family_id.")
+        bot.reply_to(message, "Неверный формат user_id.")
         return
     
     conn = get_db_connection()
@@ -544,23 +550,27 @@ def handle_add_member(message):
     
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM user_families WHERE family_id = %s", (family_id,))
-        member_count = cursor.fetchone()[0]
-        if member_count >= 5:
-            bot.reply_to(message, "Нельзя добавить больше 5 человек в семью.")
-            return
-
+        
         cursor.execute("SELECT 1 FROM user_families WHERE user_id = %s", (target_user_id,))
         if cursor.fetchone():
             bot.reply_to(message, "Этот пользователь уже состоит в какой-то семье.")
             return
 
+        invite_code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
         cursor.execute(
-            "INSERT INTO user_families (user_id, family_id, role) VALUES (%s, %s, 'member')",
+            "INSERT INTO families (name, owner_user_id, invite_code) VALUES (%s, %s, %s) RETURNING id",
+            (family_name, target_user_id, invite_code)
+        )
+        family_id = cursor.fetchone()[0]
+        
+        create_expense_table(family_id, conn)
+
+        cursor.execute(
+            "INSERT INTO user_families (user_id, family_id, role) VALUES (%s, %s, 'admin')",
             (target_user_id, family_id)
         )
         conn.commit()
-        bot.reply_to(message, f"Пользователь {target_user_id} успешно добавлен в семью {family_id}.")
+        bot.reply_to(message, f"Пользователь {target_user_id} успешно добавлен в семью '{family_name}' (ID: {family_id}).")
     except Exception as e:
         conn.rollback()
         bot.reply_to(message, f"Произошла ошибка при добавлении пользователя: {e}")
@@ -599,75 +609,6 @@ def handle_get_invite_code(message):
         else:
             bot.reply_to(message, f"Семья с ID {family_id} не найдена.")
     except Exception as e:
-        bot.reply_to(message, f"Произошла ошибка: {e}")
-    finally:
-        conn.close()
-
-@bot.message_handler(commands=['create_family'])
-def handle_create_family(message):
-    if message.from_user.id != ADMIN_USER_ID:
-        bot.reply_to(message, "Эта команда доступна только администратору бота.")
-        return
-    args = message.text.split(maxsplit=1)
-    if len(args) < 2:
-        bot.reply_to(message, "Использование: /create_family [Название_семьи]")
-        return
-    family_name = args[1].strip()
-    conn = get_db_connection()
-    if not conn:
-        bot.reply_to(message, "Проблема с подключением к базе данных.")
-        return
-    try:
-        cursor = conn.cursor()
-        invite_code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
-        cursor.execute(
-            "INSERT INTO families (name, owner_user_id, invite_code) VALUES (%s, %s, %s) RETURNING id",
-            (family_name, message.from_user.id, invite_code)
-        )
-        family_id = cursor.fetchone()[0]
-        bot.reply_to(message, f"Семья '{family_name}' (ID: {family_id}) создана. Код приглашения: `{invite_code}`.", parse_mode='Markdown')
-    except psycopg2.errors.UniqueViolation:
-        conn.rollback()
-        bot.reply_to(message, "Семья с таким названием уже существует.")
-    except Exception as e:
-        conn.rollback()
-        bot.reply_to(message, f"Произошла ошибка при создании семьи: {e}")
-    finally:
-        conn.close()
-
-@bot.message_handler(commands=['set_subscription'])
-def handle_set_subscription(message):
-    if message.from_user.id != ADMIN_USER_ID:
-        bot.reply_to(message, "Эта команда доступна только администратору бота.")
-        return
-    args = message.text.split()
-    if len(args) != 3:
-        bot.reply_to(message, "Использование: /set_subscription [ID_семьи] [ГГГГ-ММ-ДД]")
-        return
-    try:
-        family_id = int(args[1])
-        end_date_str = args[2]
-        end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
-    except ValueError:
-        bot.reply_to(message, "Неверный формат ID семьи или даты. Используйте: /set_subscription [ID_семьи] [ГГГГ-ММ-ДД]")
-        return
-    conn = get_db_connection()
-    if not conn:
-        bot.reply_to(message, "Проблема с подключением к базе данных.")
-        return
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE families SET subscription_end_date = %s, is_active = TRUE WHERE id = %s",
-            (end_date, family_id)
-        )
-        conn.commit()
-        if cursor.rowcount > 0:
-            bot.reply_to(message, f"Подписка для семьи ID {family_id} установлена до {end_date.strftime('%Y-%m-%d')}.")
-        else:
-            bot.reply_to(message, f"Семья с ID {family_id} не найдена.")
-    except Exception as e:
-        conn.rollback()
         bot.reply_to(message, f"Произошла ошибка: {e}")
     finally:
         conn.close()
@@ -766,7 +707,6 @@ def handle_text_messages(message):
         return
 
     text = message.text
-    # Парсинг нескольких пар "описание сумма"
     pattern = r'([\w\s]+)\s+([\d\s.,]+)(?:тг)?'
     matches = re.findall(pattern, text, re.IGNORECASE)
     
@@ -781,6 +721,8 @@ def handle_text_messages(message):
 
     try:
         success_count = 0
+        table_name = get_expense_table_name(family_id)
+
         for match in matches:
             description = match[0].strip()
             amount_str = match[1].strip().replace(' ', '').replace(',', '.')
@@ -792,8 +734,8 @@ def handle_text_messages(message):
                 
                 cursor = conn.cursor()
                 cursor.execute(
-                    "INSERT INTO expenses (user_id, family_id, amount, currency, description, category) VALUES (%s, %s, %s, %s, %s, %s)",
-                    (user_id, family_id, amount, currency, description, category)
+                    f"INSERT INTO {table_name} (user_id, amount, currency, description, category) VALUES (%s, %s, %s, %s, %s)",
+                    (user_id, amount, currency, description, category)
                 )
                 success_count += 1
             except ValueError:
@@ -867,6 +809,7 @@ def parse_date_period(text):
             pass
     return start_date, end_date
 
+
 # --- Запуск бота ---
 if __name__ == '__main__':
     train_model(TRAINING_DATA)
@@ -876,9 +819,8 @@ if __name__ == '__main__':
         telebot.types.BotCommand("/start", "Перезапустить бота"),
         telebot.types.BotCommand("/menu", "Показать главное меню"),
         telebot.types.BotCommand("/report", "Получить отчет о расходах"),
-        telebot.types.BotCommand("/add_member", "Добавить участника (только админ)"),
-        telebot.types.BotCommand("/create_family", "Создать семью (только админ)"),
-        telebot.types.BotCommand("/set_subscription", "Установить подписку (только админ)"),
+        telebot.types.BotCommand("/add_user", "Добавить пользователя (только админ)"),
+        telebot.types.BotCommand("/get_invite_code", "Получить код (только админ)"),
         telebot.types.BotCommand("/view_data", "Просмотреть данные (только админ)"),
     ]
     bot.set_my_commands(commands)
