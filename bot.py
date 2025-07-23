@@ -15,6 +15,7 @@ import random
 import string
 from dotenv import load_dotenv
 
+# Загружаем переменные окружения из .env файла
 load_dotenv()
 
 # --- Настройки бота ---
@@ -120,7 +121,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS expenses (
                 id SERIAL PRIMARY KEY,
                 user_id BIGINT,
-                family_id INTEGER NULL,
+                family_id INTEGER,
                 amount REAL,
                 currency TEXT,
                 description TEXT,
@@ -203,9 +204,8 @@ def get_main_menu_keyboard():
     keyboard = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
     btn_add_expense = types.KeyboardButton('💸 Добавить расход')
     btn_report = types.KeyboardButton('📊 Отчеты')
-    btn_add_recurring = types.KeyboardButton('⏰ Напоминания')
     btn_manage_family = types.KeyboardButton('👨‍👩‍👧‍👦 Семья')
-    keyboard.add(btn_add_expense, btn_report, btn_add_recurring, btn_manage_family)
+    keyboard.add(btn_add_expense, btn_report, btn_manage_family)
     return keyboard
 
 def get_report_period_keyboard():
@@ -384,9 +384,9 @@ def handle_family_members(call):
     try:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT uf.user_id, uf.role
-            FROM user_families uf
-            WHERE uf.family_id = %s
+            SELECT user_id, role
+            FROM user_families
+            WHERE family_id = %s
         """, (family_id,))
         members = cursor.fetchall()
         
@@ -758,23 +758,17 @@ def handle_text_messages(message):
     user_id = message.from_user.id
     family_id = get_user_active_family_id(user_id)
     
-    # Обработка нажатий на кнопки
     if message.text in ['💸 Добавить расход', '📊 Отчеты', '👨‍👩‍👧‍👦 Семья']:
         return
     
-    # Обработка инвайт-кодов, отправленных напрямую
-    if len(message.text) == 8 and message.text.isalnum():
-        handle_invite_code_direct(message)
-        return
-
     if family_id is None:
         bot.send_message(message.chat.id, "Вы не состоите в активной семье. Для записи расходов вам нужно быть добавленным администратором. Напишите /start.", reply_markup=get_main_menu_keyboard())
         return
 
     text = message.text
-    # Новый парсер, который ищет несколько пар "описание сумма"
-    pattern = r'([\w\s]+)\s+([\d\s.,]+)'
-    matches = re.findall(pattern, text)
+    # Парсинг нескольких пар "описание сумма"
+    pattern = r'([\w\s]+)\s+([\d\s.,]+)(?:тг)?'
+    matches = re.findall(pattern, text, re.IGNORECASE)
     
     if not matches:
         bot.send_message(message.chat.id, "Не могу распознать расход. Пожалуйста, используйте формат 'описание сумма', например: 'хлеб 100, молоко 500'.", reply_markup=get_main_menu_keyboard())
@@ -786,13 +780,14 @@ def handle_text_messages(message):
         return
 
     try:
+        success_count = 0
         for match in matches:
             description = match[0].strip()
             amount_str = match[1].strip().replace(' ', '').replace(',', '.')
             
             try:
                 amount = float(amount_str)
-                currency = 'тг' # Валюта по умолчанию, можно изменить
+                currency = 'тг'
                 category = classify_expense(description)
                 
                 cursor = conn.cursor()
@@ -800,26 +795,83 @@ def handle_text_messages(message):
                     "INSERT INTO expenses (user_id, family_id, amount, currency, description, category) VALUES (%s, %s, %s, %s, %s, %s)",
                     (user_id, family_id, amount, currency, description, category)
                 )
+                success_count += 1
             except ValueError:
                 bot.send_message(message.chat.id, f"Не могу распознать сумму для '{description}'. Проверьте формат.", reply_markup=get_main_menu_keyboard())
                 conn.rollback()
                 return
 
         conn.commit()
-        bot.send_message(message.chat.id, f"✅ Расходы успешно добавлены. Спасибо!", reply_markup=get_main_menu_keyboard())
+        if success_count > 0:
+            bot.send_message(message.chat.id, f"✅ Успешно добавлено {success_count} расходов.", reply_markup=get_main_menu_keyboard())
     except Exception as e:
         conn.rollback()
         bot.send_message(message.chat.id, f"Произошла ошибка при сохранении расхода: {e}", reply_markup=get_main_menu_keyboard())
     finally:
         conn.close()
 
+def parse_date_period(text):
+    text_lower = text.lower()
+    start_date = None
+    end_date = datetime.now()
+    if 'сегодня' in text_lower:
+        start_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    elif 'неделя' in text_lower:
+        start_date = datetime.now() - timedelta(weeks=1)
+        start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
+    elif 'месяц' in text_lower:
+        start_date = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    elif 'год' in text_lower:
+        start_date = datetime.now().replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    elif 'с ' in text_lower and ' по ' in text_lower:
+        try:
+            date_from_match = re.search(r'с\s+(\d{1,2}[.]\d{1,2}(?:[.]\d{2,4})?)', text_lower)
+            date_to_match = re.search(r'по\s+(\d{1,2}[.]\d{1,2}(?:[.]\d{2,4})?)', text_lower)
+            if date_from_match and date_to_match:
+                date_from_str = date_from_match.group(1)
+                date_to_str = date_to_match.group(1)
+                for fmt in ["%d.%m.%Y", "%d.%m.%y", "%d.%m"]:
+                    try:
+                        start_date = datetime.strptime(date_from_str, fmt)
+                        if fmt == "%d.%m": start_date = start_date.replace(year=datetime.now().year)
+                        start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
+                        break
+                    except ValueError: pass
+                for fmt in ["%d.%m.%Y", "%d.%m.%y", "%d.%m"]:
+                    try:
+                        end_date = datetime.strptime(date_to_str, fmt)
+                        if fmt == "%d.%m": end_date = end_date.replace(year=datetime.now().year)
+                        end_date = end_date.replace(hour=23, minute=59, second=59, microsecond=999999)
+                        break
+                    except ValueError: pass
+        except Exception as e:
+            print(f"Ошибка парсинга диапазона дат: {e}")
+            start_date = None
+    else:
+        try:
+            month_map = {
+                'январь': 1, 'февраль': 2, 'март': 3, 'апрель': 4, 'май': 5, 'июнь': 6,
+                'июль': 7, 'август': 8, 'сентябрь': 9, 'октябрь': 10, 'ноябрь': 11, 'декабрь': 12
+            }
+            month_year_match = re.search(r'([а-яё]+)\s*(\d{4})', text_lower)
+            if month_year_match:
+                month_name = month_year_match.group(1)
+                year = int(month_year_match.group(2))
+                month_num = month_map.get(month_name)
+                if month_num:
+                    start_date = datetime(year, month_num, 1, 0, 0, 0, 0)
+                    if month_num == 12: end_date = datetime(year + 1, 1, 1, 0, 0, 0, 0) - timedelta(microseconds=1)
+                    else: end_date = datetime(year, month_num + 1, 1, 0, 0, 0, 0) - timedelta(microseconds=1)
+        except Exception as e:
+            print(f"Ошибка парсинга 'месяц год': {e}")
+            pass
+    return start_date, end_date
 
 # --- Запуск бота ---
 if __name__ == '__main__':
     train_model(TRAINING_DATA)
     init_db()
     
-    # Настройка постоянного меню (по вашей идее)
     commands = [
         telebot.types.BotCommand("/start", "Перезапустить бота"),
         telebot.types.BotCommand("/menu", "Показать главное меню"),

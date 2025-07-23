@@ -1,6 +1,6 @@
-pyTelegramBotAPI
-psycopg2-binary
-matplotlib
-pandas
-scikit-learn
-numpy
+pyTelegramBotAPI==4.10.0
+psycopg2-binary==2.9.9
+matplotlib==3.8.3
+pandas==2.2.1
+scikit-learn==1.4.1.post1
+python-dotenv==1.0.1
