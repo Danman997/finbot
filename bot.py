@@ -165,7 +165,8 @@ def handle_report_callback(call):
     user_id = call.from_user.id
     period_text = call.data.replace('report_', '')
     
-    bot.edit_message_reply_markup(chat_id, call.message.message_id)
+    # Сразу удаляем inline-клавиатуру после выбора
+    bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
     
     if period_text == 'другой':
         bot.send_message(chat_id, "Введите свой период (например, 'с 01.01.2024 по 31.01.2024').", reply_markup=get_main_menu_keyboard())
@@ -230,13 +231,17 @@ def parse_date_period(text):
     end_date = datetime.now()
     if 'сегодня' in text_lower:
         start_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        end_date = start_date + timedelta(days=1, microseconds=-1)
     elif 'неделя' in text_lower:
         start_date = datetime.now() - timedelta(weeks=1)
         start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_date = datetime.now()
     elif 'месяц' in text_lower:
         start_date = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        end_date = datetime.now()
     elif 'год' in text_lower:
         start_date = datetime.now().replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        end_date = datetime.now()
     elif 'с ' in text_lower and ' по ' in text_lower:
         try:
             date_from_match = re.search(r'с\s+(\d{1,2}[.]\d{1,2}(?:[.]\d{2,4})?)', text_lower)
