@@ -7,14 +7,24 @@ from datetime import datetime, timedelta, timezone
 import matplotlib.pyplot as plt
 import io # Для работы с изображениями в памяти
 
-# Настройка логирования (для отладки)
+# --- Настройка логирования (для отладки) ---
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Получение DATABASE_URL из переменных окружения Railway
+# --- Получение переменных окружения из Railway ---
+# Используем BOT_TOKEN, как это указано в ваших переменных Railway
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
+# ADMIN_USER_ID - если вы хотите использовать его для отправки уведомлений админу
+ADMIN_USER_ID = os.getenv("ADMIN_USER_ID") 
+if ADMIN_USER_ID:
+    try:
+        ADMIN_USER_ID = int(ADMIN_USER_ID)
+    except ValueError:
+        logger.warning("ADMIN_USER_ID is not a valid integer. It will be ignored.")
+        ADMIN_USER_ID = None
 
 # --- Функции для работы с базой данных ---
 
@@ -22,15 +32,17 @@ def get_db_connection():
     """Устанавливает соединение с базой данных PostgreSQL."""
     if not DATABASE_URL:
         logger.error("DATABASE_URL environment variable is not set.")
-        raise ValueError("DATABASE_URL is not set.")
+        raise ValueError("DATABASE_URL is not set. Cannot connect to database.")
     return psycopg2.connect(DATABASE_URL)
 
 def create_table_if_not_exists():
-    """Создает таблицу expenses, если она не существует."""
+    """Создает таблицу expenses и триггер, если они не существуют."""
     conn = None
     try:
         conn = get_db_connection()
         cur = conn.cursor()
+        
+        # Создание таблицы expenses
         cur.execute('''
             CREATE TABLE IF NOT EXISTS expenses (
                 id SERIAL PRIMARY KEY,
@@ -43,7 +55,8 @@ def create_table_if_not_exists():
                 updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
         ''')
-        # Если триггер еще не был создан DBeaver'ом, создадим его здесь
+        
+        # Создание функции-триггера для updated_at (если не существует или требует обновления)
         cur.execute('''
             CREATE OR REPLACE FUNCTION update_updated_at_column()
             RETURNS TRIGGER AS $$
@@ -52,7 +65,10 @@ def create_table_if_not_exists():
                 RETURN NEW;
             END;
             $$ LANGUAGE plpgsql;
-
+        ''')
+        
+        # Создание триггера (удаляем, если уже есть, и создаем заново, чтобы быть уверенными)
+        cur.execute('''
             DROP TRIGGER IF EXISTS update_expenses_updated_at ON expenses;
             CREATE TRIGGER update_expenses_updated_at
             BEFORE UPDATE ON expenses
@@ -65,6 +81,12 @@ def create_table_if_not_exists():
         logger.error(f"Ошибка при создании/обновлении таблицы: {e}")
         if conn:
             conn.rollback()
+        # Возможно, отправить сообщение админу, если ADMIN_USER_ID установлен
+        # if ADMIN_USER_ID:
+        #     async def send_error_to_admin():
+        #         await application.bot.send_message(chat_id=ADMIN_USER_ID, text=f"Ошибка БД: {e}")
+        #     # Это потребует настройки, чтобы application был доступен здесь.
+        #     # Для простоты, пока просто логируем.
     finally:
         if conn:
             conn.close()
@@ -150,7 +172,7 @@ async def handle_message(update: Update, context) -> None:
 
         if add_expense(amount, category, description, transaction_date):
             await update.message.reply_text(
-                f"Расход {amount} ({category}) записан!"
+                f"Расход {amount:.2f} ({category}) записан!" # Форматируем сумму
             )
         else:
             await update.message.reply_text(
@@ -187,11 +209,6 @@ def generate_expense_chart(expenses_data, title="Расходы по катег�
     
     # Создаем диаграмму
     fig1, ax1 = plt.subplots(figsize=(8, 8))
-    # 'autopct' - формат отображения процентов
-    # 'pctdistance' - расстояние процентов от центра
-    # 'startangle' - угол, с которого начинается первый сектор
-    # 'wedgeprops' - свойства секторов (например, граница)
-    # 'textprops' - свойства текста процентов и меток
     ax1.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=90, colors=colors,
             wedgeprops={'edgecolor': 'black', 'linewidth': 0.5, 'antialiased': True},
             textprops={'fontsize': 10, 'color': 'black', 'weight': 'bold'})
@@ -250,10 +267,19 @@ async def report(update: Update, context) -> None:
 
 def main():
     """Запускает бота."""
+    # Убедимся, что токен бота установлен
+    if not BOT_TOKEN:
+        logger.error("BOT_TOKEN environment variable is not set. Bot cannot start.")
+        raise ValueError("BOT_TOKEN is not set.")
+
     # Убедимся, что таблица создана/обновлена перед запуском бота
+    # create_table_if_not_exists() вызывается здесь для инициализации БД
+    # Обратите внимание: функция create_table_if_not_exists() должна быть потокобезопасной
+    # или вызываться до инициализации Application.
+    # В текущей структуре она вызывается синхронно до run_polling, что нормально.
     create_table_if_not_exists() 
 
-    application = Application.builder().token(os.getenv("TELEGRAM_BOT_TOKEN")).build()
+    application = Application.builder().token(BOT_TOKEN).build() # Использование BOT_TOKEN
 
     # Обработчики команд и сообщений
     application.add_handler(CommandHandler("start", start))
