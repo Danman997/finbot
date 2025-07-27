@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import matplotlib.pyplot as plt
 import io # Для работы с изображениями в памяти
 from telegram.ext import ConversationHandler
+import re
 
 # --- Настройка логирования (для отладки) ---
 logging.basicConfig(
@@ -148,18 +149,19 @@ async def menu(update: Update, context) -> None:
 # --- Хэндлер для выбора периода ---
 PERIOD = 1
 async def period_choice(update: Update, context) -> int:
+    logger.info(f"Выбран период: {update.message.text}")
     text = update.message.text.lower()
     today = datetime.now(timezone.utc)
-    if text == "сегодня":
+    if text in ["сегодня", "сегодня"]:
         start = today.replace(hour=0, minute=0, second=0, microsecond=0)
         end = today.replace(hour=23, minute=59, second=59, microsecond=999999)
-    elif text == "неделя":
+    elif text in ["неделя", "неделя"]:
         start = (today - timedelta(days=6)).replace(hour=0, minute=0, second=0, microsecond=0)
         end = today.replace(hour=23, minute=59, second=59, microsecond=999999)
-    elif text == "месяц":
+    elif text in ["месяц", "месяц"]:
         start = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         end = today.replace(hour=23, minute=59, second=59, microsecond=999999)
-    elif text == "год":
+    elif text in ["год", "год"]:
         start = today.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
         end = today.replace(hour=23, minute=59, second=59, microsecond=999999)
     else:
@@ -198,7 +200,7 @@ async def send_report(update, context, start, end):
 report_conv_handler = ConversationHandler(
     entry_points=[MessageHandler(filters.Regex("^📊 Отчеты$"), menu)],
     states={
-        PERIOD: [MessageHandler(filters.Regex("^(Сегодня|Неделя|Месяц|Год)$"), period_choice)],
+        PERIOD: [MessageHandler(filters.Regex("^(Сегодня|Неделя|Месяц|Год)$", flags=re.IGNORECASE), period_choice)],
     },
     fallbacks=[],
     allow_reentry=True
