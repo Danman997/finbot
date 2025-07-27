@@ -36,73 +36,44 @@ def get_db_connection():
     return psycopg2.connect(DATABASE_URL)
 
 def create_table_if_not_exists():
-    """Создает таблицу expenses и триггер, если они не существуют."""
+    """
+    Создаёт таблицу expenses, если она не существует, с нужными полями.
+    """
     conn = None
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        
-        # Создание таблицы expenses
         cur.execute('''
             CREATE TABLE IF NOT EXISTS expenses (
                 id SERIAL PRIMARY KEY,
                 amount NUMERIC(10, 2) NOT NULL,
-                type VARCHAR(50) NOT NULL DEFAULT 'expense',
-                category VARCHAR(100) NOT NULL,
                 description TEXT,
-                transaction_date TIMESTAMP WITH TIME ZONE NOT NULL,
-                created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+                category VARCHAR(100) NOT NULL,
+                transaction_date TIMESTAMP WITH TIME ZONE NOT NULL
             );
         ''')
-        
-        # Создание функции-триггера для updated_at (если не существует или требует обновления)
-        cur.execute('''
-            CREATE OR REPLACE FUNCTION update_updated_at_column()
-            RETURNS TRIGGER AS $$
-            BEGIN
-                NEW.updated_at = NOW();
-                RETURN NEW;
-            END;
-            $$ LANGUAGE plpgsql;
-        ''')
-        
-        # Создание триггера (удаляем, если уже есть, и создаем заново, чтобы быть уверенными)
-        cur.execute('''
-            DROP TRIGGER IF EXISTS update_expenses_updated_at ON expenses;
-            CREATE TRIGGER update_expenses_updated_at
-            BEFORE UPDATE ON expenses
-            FOR EACH ROW
-            EXECUTE FUNCTION update_updated_at_column();
-        ''')
         conn.commit()
-        logger.info("Таблица 'expenses' и триггер проверены/созданы.")
+        logger.info("Таблица 'expenses' проверена/создана.")
     except Exception as e:
         logger.error(f"Ошибка при создании/обновлении таблицы: {e}")
         if conn:
             conn.rollback()
-        # Возможно, отправить сообщение админу, если ADMIN_USER_ID установлен
-        # if ADMIN_USER_ID:
-        #     async def send_error_to_admin():
-        #         await application.bot.send_message(chat_id=ADMIN_USER_ID, text=f"Ошибка БД: {e}")
-        #     # Это потребует настройки, чтобы application был доступен здесь.
-        #     # Для простоты, пока просто логируем.
     finally:
         if conn:
             conn.close()
 
-def add_expense(amount, category, description, transaction_date, expense_type='expense'):
-    """Добавляет новую запись о расходе/доходе в базу данных."""
+# --- Исправленная функция добавления расхода ---
+def add_expense(amount, category, description, transaction_date):
     conn = None
     try:
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute(
             """
-            INSERT INTO expenses (amount, type, category, description, transaction_date)
-            VALUES (%s, %s, %s, %s, %s);
+            INSERT INTO expenses (amount, description, category, transaction_date)
+            VALUES (%s, %s, %s, %s);
             """,
-            (amount, expense_type, category, description, transaction_date)
+            (amount, description, category, transaction_date)
         )
         conn.commit()
         logger.info(f"Добавлена запись: {amount} {category} {description} {transaction_date}")
@@ -116,8 +87,8 @@ def add_expense(amount, category, description, transaction_date, expense_type='e
         if conn:
             conn.close()
 
-def get_expenses_for_report(start_date: datetime, end_date: datetime, expense_type='expense'):
-    """Получает расходы за указанный период."""
+# --- Исправленная функция выборки расходов для отчёта ---
+def get_expenses_for_report(start_date: datetime, end_date: datetime):
     conn = None
     expenses = []
     try:
@@ -127,15 +98,15 @@ def get_expenses_for_report(start_date: datetime, end_date: datetime, expense_ty
             """
             SELECT amount, category, description, transaction_date
             FROM expenses
-            WHERE transaction_date BETWEEN %s AND %s AND type = %s
+            WHERE transaction_date BETWEEN %s AND %s
             ORDER BY transaction_date;
             """,
-            (start_date, end_date, expense_type)
+            (start_date, end_date)
         )
         expenses = cur.fetchall()
-        logger.info(f"Получено {len(expenses)} записей для отчета за период {start_date} - {end_date}")
+        logger.info(f"Получено {len(expenses)} записей для отчёта за период {start_date} - {end_date}")
     except Exception as e:
-        logger.error(f"Ошибка при получении расходов для отчета: {e}")
+        logger.error(f"Ошибка при получении расходов для отчёта: {e}")
     finally:
         if conn:
             conn.close()
@@ -152,7 +123,9 @@ async def start(update: Update, context) -> None:
     )
 
 async def handle_message(update: Update, context) -> None:
-    """Обрабатывает текстовые сообщения для записи расходов."""
+    """
+    Обрабатывает текстовые сообщения для записи расходов.
+    """
     text = update.message.text
     logger.info(f"Получено сообщение от {update.message.from_user.id}: {text}")
 
@@ -168,15 +141,15 @@ async def handle_message(update: Update, context) -> None:
         amount = float(parts[0])
         category = parts[1]
         description = parts[2] if len(parts) > 2 else ""
-        transaction_date = datetime.now(timezone.utc) # UTC время для consistent storage
+        transaction_date = datetime.now(timezone.utc)
 
         if add_expense(amount, category, description, transaction_date):
             await update.message.reply_text(
-                f"Расход {amount:.2f} ({category}) записан!" # Форматируем сумму
+                f"Расход {amount:.2f} ({category}) записан!"
             )
         else:
             await update.message.reply_text(
-                "Произошла ошибка при записи расхода. Пожалуйста, попробуйте еще раз."
+                "Произошла ошибка при записи расхода. Пожалуйста, попробуйте ещё раз."
             )
 
     except ValueError:
@@ -190,73 +163,46 @@ async def handle_message(update: Update, context) -> None:
 # --- Функции для генерации отчетов и диаграмм ---
 
 def generate_expense_chart(expenses_data, title="Расходы по категориям"):
-    """
-    Генерирует круговую диаграмму расходов по категориям.
-    Возвращает BytesIO объект с изображением.
-    """
     category_sums = {}
     for amount, category, _, _ in expenses_data:
         category_sums[category] = category_sums.get(category, 0) + float(amount)
-
     if not category_sums:
         return None
-
     labels = list(category_sums.keys())
     sizes = list(category_sums.values())
-    
-    # Цветовая палитра для диаграммы
-    colors = plt.cm.Paired.colors # Можно выбрать другую палитру: tab10, Dark2, Set3, etc.
-    
-    # Создаем диаграмму
+    colors = plt.cm.Paired.colors
     fig1, ax1 = plt.subplots(figsize=(8, 8))
     ax1.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=90, colors=colors,
             wedgeprops={'edgecolor': 'black', 'linewidth': 0.5, 'antialiased': True},
             textprops={'fontsize': 10, 'color': 'black', 'weight': 'bold'})
-    
-    ax1.axis('equal')  # Гарантирует, что круговая диаграмма будет круглой.
-    plt.title(title, fontsize=16, pad=20, weight='bold') # Заголовок диаграммы
-    plt.tight_layout() # Автоматически корректирует параметры подложки для плотного расположения
-
+    ax1.axis('equal')
+    plt.title(title, fontsize=16, pad=20, weight='bold')
+    plt.tight_layout()
     buf = io.BytesIO()
-    plt.savefig(buf, format='png', bbox_inches='tight', dpi=150) # Сохраняем в буфер
-    buf.seek(0) # Перемещаем указатель в начало буфера
-    plt.close(fig1) # Закрываем фигуру, чтобы освободить память
+    plt.savefig(buf, format='png', bbox_inches='tight', dpi=150)
+    buf.seek(0)
+    plt.close(fig1)
     return buf
 
 async def report(update: Update, context) -> None:
-    """Генерирует и отправляет отчет о расходах за месяц."""
     logger.info(f"Получена команда /report от {update.message.from_user.id}")
-    
-    await update.message.reply_text("Формирую отчет за текущий месяц...")
-
+    await update.message.reply_text("Формирую отчёт за текущий месяц...")
     today = datetime.now(timezone.utc)
-    # Отчет за текущий календарный месяц (с 1-го числа до текущей даты)
     start_of_month = datetime(today.year, today.month, 1, 0, 0, 0, tzinfo=timezone.utc)
-    # Конец текущего дня
     end_of_day = datetime(today.year, today.month, today.day, 23, 59, 59, tzinfo=timezone.utc)
-
-    expenses_data = get_expenses_for_report(start_of_month, end_of_day, 'expense')
-
+    expenses_data = get_expenses_for_report(start_of_month, end_of_day)
     if not expenses_data:
         await update.message.reply_text("За текущий месяц расходы не найдены.")
         return
-
-    # Подготавливаем текстовый отчет
     total_amount = sum(float(e[0]) for e in expenses_data)
-    report_text = f"📊 *Отчет о расходах за {start_of_month.strftime('%B %Y')}*\n\n"
-    
+    report_text = f"📊 *Отчёт о расходах за {start_of_month.strftime('%B %Y')}*\n\n"
     category_sums = {}
     for amount, category, _, _ in expenses_data:
         category_sums[category] = category_sums.get(category, 0) + float(amount)
-
     for category, amount in sorted(category_sums.items(), key=lambda item: item[1], reverse=True):
         report_text += f"*{category}:* {amount:.2f}\n"
-    
     report_text += f"\n*Итого расходов: {total_amount:.2f}*"
-
-    # Генерируем диаграмму
     chart_buffer = generate_expense_chart(expenses_data, f"Расходы за {start_of_month.strftime('%B %Y')}")
-
     if chart_buffer:
         await update.message.reply_photo(photo=chart_buffer, caption=report_text, parse_mode='Markdown')
     else:
