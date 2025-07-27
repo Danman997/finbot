@@ -123,19 +123,103 @@ async def start(update: Update, context) -> None:
         "Для отчета используй команду /report."
     )
 
+# --- Главное меню ---
+def get_main_menu_keyboard():
+    keyboard = [
+        [KeyboardButton("Добавить расход"), KeyboardButton("📊 Отчеты")]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+# --- Клавиатура для выбора периода отчета ---
+def get_report_period_keyboard():
+    keyboard = [
+        [KeyboardButton("Сегодня"), KeyboardButton("Неделя")],
+        [KeyboardButton("Месяц"), KeyboardButton("Год")]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+
+# --- Хэндлер для кнопки "📊 Отчеты" ---
+async def menu(update: Update, context) -> None:
+    await update.message.reply_text(
+        "За какой период вы хотите отчет?",
+        reply_markup=get_report_period_keyboard()
+    )
+
+# --- Хэндлер для выбора периода ---
+PERIOD = 1
+async def period_choice(update: Update, context) -> int:
+    text = update.message.text.lower()
+    today = datetime.now(timezone.utc)
+    if text == "сегодня":
+        start = today.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = today.replace(hour=23, minute=59, second=59, microsecond=999999)
+    elif text == "неделя":
+        start = (today - timedelta(days=6)).replace(hour=0, minute=0, second=0, microsecond=0)
+        end = today.replace(hour=23, minute=59, second=59, microsecond=999999)
+    elif text == "месяц":
+        start = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        end = today.replace(hour=23, minute=59, second=59, microsecond=999999)
+    elif text == "год":
+        start = today.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        end = today.replace(hour=23, minute=59, second=59, microsecond=999999)
+    else:
+        await update.message.reply_text("Пожалуйста, выберите период с клавиатуры.", reply_markup=get_report_period_keyboard())
+        return PERIOD
+    await send_report(update, context, start, end)
+    # После отчета возвращаем главное меню
+    await update.message.reply_text("Главное меню:", reply_markup=get_main_menu_keyboard())
+    return ConversationHandler.END
+
+# --- Универсальная функция отправки отчета за период ---
+async def send_report(update, context, start, end):
+    try:
+        expenses_data = get_expenses_for_report(start, end)
+        if not expenses_data:
+            await update.message.reply_text("За выбранный период расходы не найдены.")
+            return
+        total_amount = sum(float(e[0]) for e in expenses_data)
+        report_text = f"📊 *Отчёт о расходах за период*\n\n"
+        category_sums = {}
+        for amount, category, _, _ in expenses_data:
+            category_sums[category] = category_sums.get(category, 0) + float(amount)
+        for category, amount in sorted(category_sums.items(), key=lambda item: item[1], reverse=True):
+            report_text += f"*{category}:* {amount:.2f}\n"
+        report_text += f"\n*Итого расходов: {total_amount:.2f}*"
+        chart_buffer = generate_expense_chart(expenses_data, f"Расходы за период")
+        if chart_buffer:
+            await update.message.reply_photo(photo=chart_buffer, caption=report_text, parse_mode='Markdown')
+        else:
+            await update.message.reply_text(report_text, parse_mode='Markdown')
+    except Exception as e:
+        logger.error(f"Ошибка при формировании отчёта: {e}")
+        await update.message.reply_text(f"Ошибка при формировании отчёта: {e}")
+
+# --- ConversationHandler для меню отчетов ---
+report_conv_handler = ConversationHandler(
+    entry_points=[MessageHandler(filters.Regex("^📊 Отчеты$"), menu)],
+    states={
+        PERIOD: [MessageHandler(filters.Regex("^(Сегодня|Неделя|Месяц|Год)$"), period_choice)],
+    },
+    fallbacks=[],
+    allow_reentry=True
+)
+
 async def handle_message(update: Update, context) -> None:
     """
     Обрабатывает текстовые сообщения для записи расходов.
     Теперь поддерживает формат: 'Описание сумма' (например, 'Хлеб 130').
+    Игнорирует сообщения-кнопки главного меню и меню отчетов.
     """
     text = update.message.text.strip()
+    if text in ["Добавить расход", "📊 Отчеты", "Сегодня", "Неделя", "Месяц", "Год"]:
+        return
     logger.info(f"Получено сообщение от {update.message.from_user.id}: {text}")
-
     import re
     match = re.match(r"(.+?)\s+(\d+[.,]?\d*)$", text)
     if not match:
         await update.message.reply_text(
-            "Неверный формат. Используйте: 'Описание сумма' (например, 'Хлеб 130')."
+            "Неверный формат. Используйте: 'Описание сумма' (например, 'Хлеб 130').",
+            reply_markup=get_main_menu_keyboard()
         )
         return
     description = match.group(1).strip()
@@ -146,19 +230,22 @@ async def handle_message(update: Update, context) -> None:
         transaction_date = datetime.now(timezone.utc)
         if add_expense(amount, category, description, transaction_date):
             await update.message.reply_text(
-                f"Расход {amount:.2f} ({description}) записан!"
+                f"Расход {amount:.2f} ({description}) записан!",
+                reply_markup=get_main_menu_keyboard()
             )
         else:
             await update.message.reply_text(
-                "Произошла ошибка при записи расхода. Пожалуйста, попробуйте ещё раз."
+                "Произошла ошибка при записи расхода. Пожалуйста, попробуйте ещё раз.",
+                reply_markup=get_main_menu_keyboard()
             )
     except ValueError:
         await update.message.reply_text(
-            "Неверный формат суммы. Сумма должна быть числом (например, 150.50)."
+            "Неверный формат суммы. Сумма должна быть числом (например, 150.50).",
+            reply_markup=get_main_menu_keyboard()
         )
     except Exception as e:
         logger.error(f"Непредвиденная ошибка при обработке сообщения: {e}")
-        await update.message.reply_text(f"Произошла непредвиденная ошибка: {e}")
+        await update.message.reply_text(f"Произошла непредвиденная ошибка: {e}", reply_markup=get_main_menu_keyboard())
 
 # --- Функции для генерации отчетов и диаграмм ---
 
@@ -211,96 +298,6 @@ async def report(update: Update, context) -> None:
     except Exception as e:
         logger.error(f"Ошибка при формировании отчёта: {e}")
         await update.message.reply_text(f"Ошибка при формировании отчёта: {e}")
-
-# --- Клавиатура для выбора периода отчета ---
-def get_report_period_keyboard():
-    keyboard = [
-        [KeyboardButton("Сегодня"), KeyboardButton("Неделя")],
-        [KeyboardButton("Месяц"), KeyboardButton("Год")],
-        [KeyboardButton("Выбрать период")]
-    ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-
-# --- Хэндлер для кнопки "📊 Отчеты" ---
-async def menu(update: Update, context) -> None:
-    await update.message.reply_text(
-        "За какой период вы хотите отчет?",
-        reply_markup=get_report_period_keyboard()
-    )
-
-# --- Хэндлер для выбора периода ---
-PERIOD, CUSTOM_PERIOD = range(2)
-
-async def period_choice(update: Update, context) -> int:
-    text = update.message.text.lower()
-    today = datetime.now(timezone.utc)
-    if text == "сегодня":
-        start = today.replace(hour=0, minute=0, second=0, microsecond=0)
-        end = today.replace(hour=23, minute=59, second=59, microsecond=999999)
-    elif text == "неделя":
-        start = (today - timedelta(days=6)).replace(hour=0, minute=0, second=0, microsecond=0)
-        end = today.replace(hour=23, minute=59, second=59, microsecond=999999)
-    elif text == "месяц":
-        start = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        end = today.replace(hour=23, minute=59, second=59, microsecond=999999)
-    elif text == "год":
-        start = today.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
-        end = today.replace(hour=23, minute=59, second=59, microsecond=999999)
-    elif text == "выбрать период":
-        await update.message.reply_text("Введите период в формате: ДД.ММ.ГГГГ-ДД.ММ.ГГГГ")
-        return CUSTOM_PERIOD
-    else:
-        await update.message.reply_text("Пожалуйста, выберите период с клавиатуры.")
-        return PERIOD
-    await send_report(update, context, start, end)
-    return ConversationHandler.END
-
-async def custom_period(update: Update, context) -> int:
-    import re
-    text = update.message.text.strip()
-    match = re.match(r"(\d{2})[.](\d{2})[.](\d{4})-(\d{2})[.](\d{2})[.](\d{4})", text)
-    if not match:
-        await update.message.reply_text("Неверный формат. Введите как: 01.07.2025-31.07.2025")
-        return CUSTOM_PERIOD
-    d1, m1, y1, d2, m2, y2 = map(int, match.groups())
-    start = datetime(y1, m1, d1, 0, 0, 0, tzinfo=timezone.utc)
-    end = datetime(y2, m2, d2, 23, 59, 59, tzinfo=timezone.utc)
-    await send_report(update, context, start, end)
-    return ConversationHandler.END
-
-# --- Универсальная функция отправки отчета за период ---
-async def send_report(update, context, start, end):
-    try:
-        expenses_data = get_expenses_for_report(start, end)
-        if not expenses_data:
-            await update.message.reply_text("За выбранный период расходы не найдены.")
-            return
-        total_amount = sum(float(e[0]) for e in expenses_data)
-        report_text = f"📊 *Отчёт о расходах за период*\n\n"
-        category_sums = {}
-        for amount, category, _, _ in expenses_data:
-            category_sums[category] = category_sums.get(category, 0) + float(amount)
-        for category, amount in sorted(category_sums.items(), key=lambda item: item[1], reverse=True):
-            report_text += f"*{category}:* {amount:.2f}\n"
-        report_text += f"\n*Итого расходов: {total_amount:.2f}*"
-        chart_buffer = generate_expense_chart(expenses_data, f"Расходы за период")
-        if chart_buffer:
-            await update.message.reply_photo(photo=chart_buffer, caption=report_text, parse_mode='Markdown')
-        else:
-            await update.message.reply_text(report_text, parse_mode='Markdown')
-    except Exception as e:
-        logger.error(f"Ошибка при формировании отчёта: {e}")
-        await update.message.reply_text(f"Ошибка при формировании отчёта: {e}")
-
-# --- ConversationHandler для меню отчетов ---
-report_conv_handler = ConversationHandler(
-    entry_points=[MessageHandler(filters.Regex("^📊 Отчеты$"), menu)],
-    states={
-        PERIOD: [MessageHandler(filters.TEXT & ~filters.COMMAND, period_choice)],
-        CUSTOM_PERIOD: [MessageHandler(filters.TEXT & ~filters.COMMAND, custom_period)],
-    },
-    fallbacks=[]
-)
 
 # --- Главная функция запуска бота ---
 
