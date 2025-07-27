@@ -140,11 +140,12 @@ def get_report_period_keyboard():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
 
 # --- Хэндлер для кнопки "📊 Отчеты" ---
-async def menu(update: Update, context) -> None:
+async def menu(update: Update, context) -> int:
     await update.message.reply_text(
         "За какой период вы хотите отчет?",
         reply_markup=get_report_period_keyboard()
     )
+    return PERIOD
 
 # --- Хэндлер для выбора периода ---
 PERIOD = 1
