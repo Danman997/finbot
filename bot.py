@@ -153,16 +153,16 @@ async def period_choice(update: Update, context) -> int:
     logger.info(f"Выбран период: {update.message.text}")
     text = update.message.text.lower()
     today = datetime.now(timezone.utc)
-    if text in ["сегодня", "сегодня"]:
+    if text == "сегодня":
         start = today.replace(hour=0, minute=0, second=0, microsecond=0)
         end = today.replace(hour=23, minute=59, second=59, microsecond=999999)
-    elif text in ["неделя", "неделя"]:
+    elif text == "неделя":
         start = (today - timedelta(days=6)).replace(hour=0, minute=0, second=0, microsecond=0)
         end = today.replace(hour=23, minute=59, second=59, microsecond=999999)
-    elif text in ["месяц", "месяц"]:
+    elif text == "месяц":
         start = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         end = today.replace(hour=23, minute=59, second=59, microsecond=999999)
-    elif text in ["год", "год"]:
+    elif text == "год":
         start = today.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
         end = today.replace(hour=23, minute=59, second=59, microsecond=999999)
     else:
@@ -172,30 +172,6 @@ async def period_choice(update: Update, context) -> int:
     # После отчета возвращаем главное меню
     await update.message.reply_text("Главное меню:", reply_markup=get_main_menu_keyboard())
     return ConversationHandler.END
-
-# --- Универсальная функция отправки отчета за период ---
-async def send_report(update, context, start, end):
-    try:
-        expenses_data = get_expenses_for_report(start, end)
-        if not expenses_data:
-            await update.message.reply_text("За выбранный период расходы не найдены.")
-            return
-        total_amount = sum(float(e[0]) for e in expenses_data)
-        report_text = f"📊 *Отчёт о расходах за период*\n\n"
-        category_sums = {}
-        for amount, category, _, _ in expenses_data:
-            category_sums[category] = category_sums.get(category, 0) + float(amount)
-        for category, amount in sorted(category_sums.items(), key=lambda item: item[1], reverse=True):
-            report_text += f"*{category}:* {amount:.2f}\n"
-        report_text += f"\n*Итого расходов: {total_amount:.2f}*"
-        chart_buffer = generate_expense_chart(expenses_data, f"Расходы за период")
-        if chart_buffer:
-            await update.message.reply_photo(photo=chart_buffer, caption=report_text, parse_mode='Markdown')
-        else:
-            await update.message.reply_text(report_text, parse_mode='Markdown')
-    except Exception as e:
-        logger.error(f"Ошибка при формировании отчёта: {e}")
-        await update.message.reply_text(f"Ошибка при формировании отчёта: {e}")
 
 # --- ConversationHandler для меню отчетов ---
 report_conv_handler = ConversationHandler(
