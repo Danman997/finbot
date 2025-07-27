@@ -251,33 +251,13 @@ def generate_expense_chart(expenses_data, title="Расходы по катег�
     plt.close(fig1)
     return buf
 
-async def report(update: Update, context) -> None:
-    logger.info(f"Получена команда /report от {update.message.from_user.id}")
-    await update.message.reply_text("Формирую отчёт за текущий месяц...")
-    today = datetime.now(timezone.utc)
-    start_of_month = datetime(today.year, today.month, 1, 0, 0, 0, tzinfo=timezone.utc)
-    end_of_day = datetime(today.year, today.month, today.day, 23, 59, 59, tzinfo=timezone.utc)
-    try:
-        expenses_data = get_expenses_for_report(start_of_month, end_of_day)
-        if not expenses_data:
-            await update.message.reply_text("За текущий месяц расходы не найдены.")
-            return
-        total_amount = sum(float(e[0]) for e in expenses_data)
-        report_text = f"📊 *Отчёт о расходах за {start_of_month.strftime('%B %Y')}*\n\n"
-        category_sums = {}
-        for amount, category, _, _ in expenses_data:
-            category_sums[category] = category_sums.get(category, 0) + float(amount)
-        for category, amount in sorted(category_sums.items(), key=lambda item: item[1], reverse=True):
-            report_text += f"*{category}:* {amount:.2f}\n"
-        report_text += f"\n*Итого расходов: {total_amount:.2f}*"
-        chart_buffer = generate_expense_chart(expenses_data, f"Расходы за {start_of_month.strftime('%B %Y')}")
-        if chart_buffer:
-            await update.message.reply_photo(photo=chart_buffer, caption=report_text, parse_mode='Markdown')
-        else:
-            await update.message.reply_text(report_text, parse_mode='Markdown')
-    except Exception as e:
-        logger.error(f"Ошибка при формировании отчёта: {e}")
-        await update.message.reply_text(f"Ошибка при формировании отчёта: {e}")
+# --- Обработчик команды /report ---
+async def report(update: Update, context) -> int:
+    await update.message.reply_text(
+        "Выберите период для отчетности:",
+        reply_markup=get_report_period_keyboard()
+    )
+    return PERIOD
 
 # --- Главная функция запуска бота ---
 
