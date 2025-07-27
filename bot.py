@@ -251,6 +251,30 @@ def generate_expense_chart(expenses_data, title="Расходы по катег�
     plt.close(fig1)
     return buf
 
+# --- Универсальная функция отправки отчета за период ---
+async def send_report(update, context, start, end):
+    try:
+        expenses_data = get_expenses_for_report(start, end)
+        if not expenses_data:
+            await update.message.reply_text("За выбранный период расходы не найдены.")
+            return
+        total_amount = sum(float(e[0]) for e in expenses_data)
+        report_text = f"📊 *Отчёт о расходах за период*\n\n"
+        category_sums = {}
+        for amount, category, _, _ in expenses_data:
+            category_sums[category] = category_sums.get(category, 0) + float(amount)
+        for category, amount in sorted(category_sums.items(), key=lambda item: item[1], reverse=True):
+            report_text += f"*{category}:* {amount:.2f}\n"
+        report_text += f"\n*Итого расходов: {total_amount:.2f}*"
+        chart_buffer = generate_expense_chart(expenses_data, f"Расходы за период")
+        if chart_buffer:
+            await update.message.reply_photo(photo=chart_buffer, caption=report_text, parse_mode='Markdown')
+        else:
+            await update.message.reply_text(report_text, parse_mode='Markdown')
+    except Exception as e:
+        logger.error(f"Ошибка при формировании отчёта: {e}")
+        await update.message.reply_text(f"Ошибка при формировании отчёта: {e}")
+
 # --- Обработчик команды /report ---
 async def report(update: Update, context) -> int:
     await update.message.reply_text(
