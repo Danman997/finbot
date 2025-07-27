@@ -211,6 +211,7 @@ async def handle_message(update: Update, context) -> None:
     Игнорирует сообщения-кнопки главного меню и меню отчетов.
     """
     text = update.message.text.strip()
+    # Не реагируем на кнопки меню и периода
     if text in ["Добавить расход", "📊 Отчеты", "Сегодня", "Неделя", "Месяц", "Год"]:
         return
     logger.info(f"Получено сообщение от {update.message.from_user.id}: {text}")
@@ -320,8 +321,7 @@ def main():
     # Обработчики команд и сообщений
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("report", report))
-    application.add_handler(MessageHandler(filters.Regex("^📊 Отчеты$"), menu))
-    application.add_handler(report_conv_handler)
+    application.add_handler(report_conv_handler)  # ConversationHandler должен идти ДО обычного MessageHandler
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logger.info("Бот запущен!")
