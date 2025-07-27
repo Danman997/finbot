@@ -125,33 +125,32 @@ async def start(update: Update, context) -> None:
 async def handle_message(update: Update, context) -> None:
     """
     Обрабатывает текстовые сообщения для записи расходов.
+    Теперь поддерживает формат: 'Описание сумма' (например, 'Хлеб 130').
     """
-    text = update.message.text
+    text = update.message.text.strip()
     logger.info(f"Получено сообщение от {update.message.from_user.id}: {text}")
 
+    import re
+    match = re.match(r"(.+?)\s+(\d+[.,]?\d*)$", text)
+    if not match:
+        await update.message.reply_text(
+            "Неверный формат. Используйте: 'Описание сумма' (например, 'Хлеб 130')."
+        )
+        return
+    description = match.group(1).strip()
+    amount_str = match.group(2).replace(',', '.')
     try:
-        parts = text.split(maxsplit=2) # Сумма, Категория, Описание
-
-        if len(parts) < 2:
-            await update.message.reply_text(
-                "Неверный формат. Используйте: 'Сумма Категория Описание' (Описание необязательно)."
-            )
-            return
-
-        amount = float(parts[0])
-        category = parts[1]
-        description = parts[2] if len(parts) > 2 else ""
+        amount = float(amount_str)
+        category = "Прочее"
         transaction_date = datetime.now(timezone.utc)
-
         if add_expense(amount, category, description, transaction_date):
             await update.message.reply_text(
-                f"Расход {amount:.2f} ({category}) записан!"
+                f"Расход {amount:.2f} ({description}) записан!"
             )
         else:
             await update.message.reply_text(
                 "Произошла ошибка при записи расхода. Пожалуйста, попробуйте ещё раз."
             )
-
     except ValueError:
         await update.message.reply_text(
             "Неверный формат суммы. Сумма должна быть числом (например, 150.50)."
@@ -190,23 +189,27 @@ async def report(update: Update, context) -> None:
     today = datetime.now(timezone.utc)
     start_of_month = datetime(today.year, today.month, 1, 0, 0, 0, tzinfo=timezone.utc)
     end_of_day = datetime(today.year, today.month, today.day, 23, 59, 59, tzinfo=timezone.utc)
-    expenses_data = get_expenses_for_report(start_of_month, end_of_day)
-    if not expenses_data:
-        await update.message.reply_text("За текущий месяц расходы не найдены.")
-        return
-    total_amount = sum(float(e[0]) for e in expenses_data)
-    report_text = f"📊 *Отчёт о расходах за {start_of_month.strftime('%B %Y')}*\n\n"
-    category_sums = {}
-    for amount, category, _, _ in expenses_data:
-        category_sums[category] = category_sums.get(category, 0) + float(amount)
-    for category, amount in sorted(category_sums.items(), key=lambda item: item[1], reverse=True):
-        report_text += f"*{category}:* {amount:.2f}\n"
-    report_text += f"\n*Итого расходов: {total_amount:.2f}*"
-    chart_buffer = generate_expense_chart(expenses_data, f"Расходы за {start_of_month.strftime('%B %Y')}")
-    if chart_buffer:
-        await update.message.reply_photo(photo=chart_buffer, caption=report_text, parse_mode='Markdown')
-    else:
-        await update.message.reply_text(report_text, parse_mode='Markdown')
+    try:
+        expenses_data = get_expenses_for_report(start_of_month, end_of_day)
+        if not expenses_data:
+            await update.message.reply_text("За текущий месяц расходы не найдены.")
+            return
+        total_amount = sum(float(e[0]) for e in expenses_data)
+        report_text = f"📊 *Отчёт о расходах за {start_of_month.strftime('%B %Y')}*\n\n"
+        category_sums = {}
+        for amount, category, _, _ in expenses_data:
+            category_sums[category] = category_sums.get(category, 0) + float(amount)
+        for category, amount in sorted(category_sums.items(), key=lambda item: item[1], reverse=True):
+            report_text += f"*{category}:* {amount:.2f}\n"
+        report_text += f"\n*Итого расходов: {total_amount:.2f}*"
+        chart_buffer = generate_expense_chart(expenses_data, f"Расходы за {start_of_month.strftime('%B %Y')}")
+        if chart_buffer:
+            await update.message.reply_photo(photo=chart_buffer, caption=report_text, parse_mode='Markdown')
+        else:
+            await update.message.reply_text(report_text, parse_mode='Markdown')
+    except Exception as e:
+        logger.error(f"Ошибка при формировании отчёта: {e}")
+        await update.message.reply_text(f"Ошибка при формировании отчёта: {e}")
 
 
 # --- Главная функция запуска бота ---
