@@ -200,7 +200,7 @@ async def send_report(update, context, start, end):
 report_conv_handler = ConversationHandler(
     entry_points=[MessageHandler(filters.Regex("^📊 Отчеты$"), menu)],
     states={
-        PERIOD: [MessageHandler(filters.Regex("^(Сегодня|Неделя|Месяц|Год)$", flags=re.IGNORECASE), period_choice)],
+        PERIOD: [MessageHandler(filters.Regex("^(Сегодня|Неделя|Месяц|Год)$"), period_choice)],
     },
     fallbacks=[],
     allow_reentry=True
