@@ -1,3 +1,6 @@
 python-telegram-bot
 psycopg2-binary
 matplotlib
+pandas
+scikit-learn
+python-dotenv
