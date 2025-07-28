@@ -1,5 +1,3 @@
-import telebot
-from telebot import types
 import os
 import logging
 import psycopg2
