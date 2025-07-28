@@ -173,11 +173,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         reply_markup=get_main_menu_keyboard()
     )
 
-async def report_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def report_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text(
         "За какой период вы хотите отчет?",
         reply_markup=get_report_period_keyboard()
     )
+    return PERIOD_CHOICE_STATE  # Важно! Переводим в состояние выбора периода
 
 async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     period_text = update.message.text.lower()
