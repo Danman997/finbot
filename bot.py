@@ -1,8 +1,13 @@
 import telebot
 from telebot import types
 import os
+import logging
 import psycopg2
-from datetime import datetime, timedelta, date
+from psycopg2 import sql
+from datetime import datetime, timedelta, timezone
+from dotenv import load_dotenv
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 import matplotlib.pyplot as plt
 import io
 import pandas as pd
@@ -10,7 +15,6 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 import numpy as np
 import re
-from dotenv import load_dotenv
 
 # Загружаем переменные окружения из .env файла
 load_dotenv()
