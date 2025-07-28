@@ -6,8 +6,8 @@ import psycopg2
 from psycopg2 import sql
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, ConversationHandler, filters
 import matplotlib.pyplot as plt
 import io
 import pandas as pd
@@ -176,10 +176,16 @@ async def start(update, context) -> None:
 
 # --- Основные хэндлеры для меню ---
 async def handle_add_expense_menu(update, context) -> None:
-    await update.message.reply_text("Отлично! Просто напиши 'описание сумма', например: 'хлеб 100, молоко 500'.", reply_markup=types.ReplyKeyboardRemove())
+    await update.message.reply_text(
+        "Отлично! Просто напиши 'описание сумма', например: 'хлеб 100, молоко 500'.",
+        reply_markup=ReplyKeyboardRemove()
+    )
 
 async def handle_report_menu(update, context) -> None:
-    await update.message.reply_text("За какой период вы хотите отчет?", reply_markup=get_report_period_keyboard())
+    await update.message.reply_text(
+        "За какой период вы хотите отчет?",
+        reply_markup=get_report_period_keyboard()
+    )
 
 # --- Callback хэндлеры для кнопок ---
 async def handle_report_callback(update, context) -> None:
