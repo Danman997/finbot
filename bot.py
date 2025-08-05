@@ -217,10 +217,21 @@ async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     amounts = [float(row[1]) for row in data]
     total = sum(amounts)
 
+    # Проверка данных перед передачей в pandas.DataFrame
+    if not data:
+        logger.error("Данные из базы данных пусты. Убедитесь, что запрос к базе данных возвращает корректные данные.")
+        return ConversationHandler.END
+
+    # Создание DataFrame
+    try:
+        df = pd.DataFrame(data, columns=['Категория', 'Сумма'])
+        df.loc[len(df)] = ['Итого', total]
+    except Exception as e:
+        logger.error(f"Ошибка при создании DataFrame: {e}")
+        return ConversationHandler.END
+
     # Создание Excel файла
     excel_buf = io.BytesIO()
-    df = pd.DataFrame(data, columns=['Категория', 'Сумма'])
-    df.loc[len(df)] = ['Итого', total]
     df.to_excel(excel_buf, index=False, engine='xlsxwriter')
     excel_buf.seek(0)
 
