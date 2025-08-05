@@ -4,3 +4,4 @@ matplotlib
 pandas
 scikit-learn
 python-dotenv
+xlsxwriter
