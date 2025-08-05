@@ -217,14 +217,6 @@ async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     amounts = [float(row[1]) for row in data]
     total = sum(amounts)
 
-    # Проверка наличия pandas и xlsxwriter
-    try:
-        import pandas as pd
-        import xlsxwriter
-    except ImportError as e:
-        await update.message.reply_text(f"Ошибка: {e}. Убедитесь, что библиотеки pandas и xlsxwriter установлены.", reply_markup=get_main_menu_keyboard())
-        return ConversationHandler.END
-
     # Создание Excel файла
     excel_buf = io.BytesIO()
     df = pd.DataFrame(data, columns=['Категория', 'Сумма'])
