@@ -191,7 +191,7 @@ async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not conn:
         await update.message.reply_text("Проблема с подключением к базе данных.", reply_markup=get_main_menu_keyboard())
         return ConversationHandler.END
-    
+
     try:
         cursor = conn.cursor()
         cursor.execute('''
@@ -199,6 +199,7 @@ async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             FROM expenses
             WHERE transaction_date BETWEEN %s AND %s
             GROUP BY category
+            ORDER BY SUM(amount) DESC
         ''', (start_date, end_date))
         data = cursor.fetchall()
     except Exception as e:
@@ -212,17 +213,29 @@ async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return ConversationHandler.END
 
     categories = [row[0] for row in data]
-    amounts = [row[1] for row in data]
+    amounts = [float(row[1]) for row in data]
+    total = sum(amounts)
+
+    # График
     fig, ax = plt.subplots(figsize=(8, 8))
-    ax.pie(amounts, labels=categories, autopct='%1.1f%%', startangle=90, pctdistance=0.85)
+    wedges, texts, autotexts = ax.pie(amounts, labels=None, autopct='%1.1f%%', startangle=90, pctdistance=0.85)
     ax.axis('equal')
-    report_title_period = period_text.capitalize()
-    plt.title(f'Отчет о расходах за {report_title_period} (Тг)')
+    plt.title(f'Отчет о расходах за {period_text.capitalize()} (Тг)')
+
+    # Легенда снизу
+    legend_labels = [f"{cat} — {amt:.2f} Тг" for cat, amt in zip(categories, amounts)]
+    plt.legend(wedges, legend_labels, title="Категории", loc="lower center", bbox_to_anchor=(0.5, -0.15), fontsize=12)
+
     buf = io.BytesIO()
     plt.savefig(buf, format='png', bbox_inches='tight', dpi=150)
     buf.seek(0)
     plt.close(fig)
-    await update.message.reply_photo(photo=buf, caption=f"Отчет за {report_title_period}", reply_markup=get_main_menu_keyboard())
+
+    # Текстовая таблица для подписи
+    table_text = "\n".join([f"{cat}: {amt:.2f} Тг" for cat, amt in zip(categories, amounts)])
+    table_text += f"\n\nИтого: {total:.2f} Тг"
+
+    await update.message.reply_photo(photo=buf, caption=table_text, reply_markup=get_main_menu_keyboard())
     return ConversationHandler.END
 
 def parse_date_period(text):
