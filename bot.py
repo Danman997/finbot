@@ -216,6 +216,13 @@ async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     amounts = [float(row[1]) for row in data]
     total = sum(amounts)
 
+    # Создание Excel файла
+    excel_buf = io.BytesIO()
+    df = pd.DataFrame(data, columns=['Категория', 'Сумма'])
+    df.loc[len(df)] = ['Итого', total]
+    df.to_excel(excel_buf, index=False, engine='xlsxwriter')
+    excel_buf.seek(0)
+
     # График
     fig, ax = plt.subplots(figsize=(8, 8))
     wedges, texts, autotexts = ax.pie(amounts, labels=None, autopct='%1.1f%%', startangle=90, pctdistance=0.85)
@@ -236,6 +243,9 @@ async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     table_text += f"\n\nИтого: {total:.2f} Тг"
 
     await update.message.reply_photo(photo=buf, caption=table_text, reply_markup=get_main_menu_keyboard())
+
+    # Отправка Excel файла
+    await update.message.reply_document(document=excel_buf, filename=f"Отчет_{period_text}.xlsx")
     return ConversationHandler.END
 
 def parse_date_period(text):
