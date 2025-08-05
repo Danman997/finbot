@@ -8,10 +8,6 @@ from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardR
 from telegram.ext import Application, CommandHandler, MessageHandler, ConversationHandler, ContextTypes, filters
 import matplotlib.pyplot as plt
 import io
-import pandas as pd
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import LogisticRegression
-import numpy as np
 import re
 
 # --- Логирование ---
@@ -33,6 +29,11 @@ if not DATABASE_URL:
     exit()
 
 # --- Модель классификации (scikit-learn) ---
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+import numpy as np
+import pandas as pd
+
 vectorizer = TfidfVectorizer()
 classifier = LogisticRegression(max_iter=1000)
 
@@ -215,6 +216,14 @@ async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     categories = [row[0] for row in data]
     amounts = [float(row[1]) for row in data]
     total = sum(amounts)
+
+    # Проверка наличия pandas и xlsxwriter
+    try:
+        import pandas as pd
+        import xlsxwriter
+    except ImportError as e:
+        await update.message.reply_text(f"Ошибка: {e}. Убедитесь, что библиотеки pandas и xlsxwriter установлены.", reply_markup=get_main_menu_keyboard())
+        return ConversationHandler.END
 
     # Создание Excel файла
     excel_buf = io.BytesIO()
