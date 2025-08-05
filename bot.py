@@ -242,6 +242,7 @@ async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     table_text = "\n".join([f"{cat}: {amt:.2f} Тг" for cat, amt in zip(categories, amounts)])
     table_text += f"\n\nИтого: {total:.2f} Тг"
 
+    # Отправка графика и подписи
     await update.message.reply_photo(photo=buf, caption=table_text, reply_markup=get_main_menu_keyboard())
 
     # Отправка Excel файла
