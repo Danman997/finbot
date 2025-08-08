@@ -213,8 +213,9 @@ async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # Создание DataFrame с полными данными
     try:
         df = pd.DataFrame(data, columns=['Описание', 'Категория', 'Сумма', 'Дата транзакции'])
-        categories = df['Категория'].unique()
-        amounts = df.groupby('Категория')['Сумма'].sum().tolist()
+        grouped_data = df.groupby('Категория', as_index=False)['Сумма'].sum().sort_values(by='Сумма', ascending=False)
+        categories = grouped_data['Категория'].tolist()
+        amounts = grouped_data['Сумма'].tolist()
         total = df['Сумма'].sum()
     except Exception as e:
         logger.error(f"Ошибка при создании DataFrame: {e}")
