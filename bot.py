@@ -194,11 +194,10 @@ async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     try:
         cursor = conn.cursor()
         cursor.execute('''
-            SELECT category, SUM(amount)
+            SELECT description, category, amount, transaction_date
             FROM expenses
             WHERE transaction_date BETWEEN %s AND %s
-            GROUP BY category
-            ORDER BY SUM(amount) DESC
+            ORDER BY transaction_date ASC
         ''', (start_date, end_date))
         data = cursor.fetchall()
     except Exception as e:
@@ -211,19 +210,9 @@ async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("За выбранный период нет расходов.", reply_markup=get_main_menu_keyboard())
         return ConversationHandler.END
 
-    categories = [row[0] for row in data]
-    amounts = [float(row[1]) for row in data]
-    total = sum(amounts)
-
-    # Проверка данных перед передачей в pandas.DataFrame
-    if not data:
-        logger.error("Данные из базы данных пусты. Убедитесь, что запрос к базе данных возвращает корректные данные.")
-        return ConversationHandler.END
-
-    # Создание DataFrame
+    # Создание DataFrame с полными данными
     try:
-        df = pd.DataFrame(data, columns=['Категория', 'Сумма'])
-        df.loc[len(df)] = ['Итого', total]
+        df = pd.DataFrame(data, columns=['Описание', 'Категория', 'Сумма', 'Дата транзакции'])
     except Exception as e:
         logger.error(f"Ошибка при создании DataFrame: {e}")
         return ConversationHandler.END
@@ -232,28 +221,6 @@ async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     excel_buf = io.BytesIO()
     df.to_excel(excel_buf, index=False, engine='xlsxwriter')
     excel_buf.seek(0)
-
-    # График
-    fig, ax = plt.subplots(figsize=(8, 8))
-    wedges, texts, autotexts = ax.pie(amounts, labels=None, autopct='%1.1f%%', startangle=90, pctdistance=0.85)
-    ax.axis('equal')
-    plt.title(f'Отчет о расходах за {period_text.capitalize()} (Тг)')
-
-    # Легенда снизу
-    legend_labels = [f"{cat} — {amt:.2f} Тг" for cat, amt in zip(categories, amounts)]
-    plt.legend(wedges, legend_labels, title="Категории", loc="lower center", bbox_to_anchor=(0.5, -0.15), fontsize=12)
-
-    buf = io.BytesIO()
-    plt.savefig(buf, format='png', bbox_inches='tight', dpi=150)
-    buf.seek(0)
-    plt.close(fig)
-
-    # Текстовая таблица для подписи
-    table_text = "\n".join([f"{cat}: {amt:.2f} Тг" for cat, amt in zip(categories, amounts)])
-    table_text += f"\n\nИтого: {total:.2f} Тг"
-
-    # Отправка графика и подписи
-    await update.message.reply_photo(photo=buf, caption=table_text, reply_markup=get_main_menu_keyboard())
 
     # Отправка Excel файла
     await update.message.reply_document(document=excel_buf, filename=f"Отчет_{period_text}.xlsx")
