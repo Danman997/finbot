@@ -5,3 +5,5 @@ pandas
 scikit-learn
 python-dotenv
 xlsxwriter
+numpy
+sklearn

@@ -9,6 +9,8 @@ from telegram.ext import Application, CommandHandler, MessageHandler, Conversati
 import matplotlib.pyplot as plt
 import io
 import re
+import schedule
+import time
 
 # --- Логирование ---
 logging.basicConfig(level=logging.INFO)
@@ -78,6 +80,9 @@ def train_model(data):
     X = vectorizer.fit_transform(descriptions)
     classifier.fit(X, categories)
     logger.info("Модель классификации успешно обучена.")
+
+# Обучение модели с обновленными данными
+train_model(TRAINING_DATA)
 
 def classify_expense(description):
     try:
@@ -341,6 +346,30 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     logger.info("Бот запущен!")
     application.run_polling()
+
+    # Функция для ежедневного обучения модели
+    def daily_training():
+        conn = get_db_connection()
+        if conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT description, category FROM expenses')
+            data = cursor.fetchall()
+            conn.close()
+            if data:
+                train_model(data)
+                logger.info("Модель успешно обучена с новыми данными.")
+            else:
+                logger.warning("Нет новых данных для обучения модели.")
+        else:
+            logger.error("Не удалось подключиться к базе данных для обучения модели.")
+
+    # Планирование ежедневного обучения
+    schedule.every().day.at("00:00").do(daily_training)
+
+    # Запуск планировщика в отдельном потоке
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
 
 if __name__ == "__main__":
     main()
