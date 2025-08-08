@@ -194,10 +194,11 @@ async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     try:
         cursor = conn.cursor()
         cursor.execute('''
-            SELECT description, category, amount, transaction_date
+            SELECT category, SUM(amount)
             FROM expenses
             WHERE transaction_date BETWEEN %s AND %s
-            ORDER BY transaction_date ASC
+            GROUP BY category
+            ORDER BY SUM(amount) DESC
         ''', (start_date, end_date))
         data = cursor.fetchall()
     except Exception as e:
@@ -210,9 +211,19 @@ async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("За выбранный период нет расходов.", reply_markup=get_main_menu_keyboard())
         return ConversationHandler.END
 
-    # Создание DataFrame с полными данными
+    categories = [row[0] for row in data]
+    amounts = [float(row[1]) for row in data]
+    total = sum(amounts)
+
+    # Проверка данных перед передачей в pandas.DataFrame
+    if not data:
+        logger.error("Данные из базы данных пусты. Убедитесь, что запрос к базе данных возвращает корректные данные.")
+        return ConversationHandler.END
+
+    # Создание DataFrame
     try:
-        df = pd.DataFrame(data, columns=['Описание', 'Категория', 'Сумма', 'Дата транзакции'])
+        df = pd.DataFrame(data, columns=['Категория', 'Сумма'])
+        df.loc[len(df)] = ['Итого', total]
     except Exception as e:
         logger.error(f"Ошибка при создании DataFrame: {e}")
         return ConversationHandler.END
