@@ -13,11 +13,15 @@ import schedule
 import time
 
 # --- Логирование ---
+log_directory = os.path.join(os.path.dirname(__file__), 'logs')
+os.makedirs(log_directory, exist_ok=True)
+log_file_path = os.path.join(log_directory, 'finbot.log')
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("finbot.log"),  # Логи будут записываться в файл finbot.log
+        logging.FileHandler(log_file_path),  # Логи будут записываться в logs/finbot.log
         logging.StreamHandler()  # Логи также будут выводиться в консоль
     ]
 )
