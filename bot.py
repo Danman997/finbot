@@ -351,7 +351,7 @@ def main():
                 conn.close()
 
                 if data:
-                    descriptions = [row[0] for row in data]
+                    descriptions = [row[0].lower() for row in data]  # Приведение описаний к нижнему регистру
                     categories = [row[1] for row in data]
                     X = vectorizer.fit_transform(descriptions)
                     classifier.fit(X, categories)
