@@ -344,15 +344,22 @@ def main():
     def daily_training():
         conn = get_db_connection()
         if conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT description, category FROM expenses')
-            data = cursor.fetchall()
-            conn.close()
-            if data:
-                train_model(data)
-                logger.info("Модель успешно обучена с новыми данными.")
-            else:
-                logger.warning("Нет новых данных для обучения модели.")
+            try:
+                cursor = conn.cursor()
+                cursor.execute('SELECT description, category FROM expenses')
+                data = cursor.fetchall()
+                conn.close()
+
+                if data:
+                    descriptions = [row[0] for row in data]
+                    categories = [row[1] for row in data]
+                    X = vectorizer.fit_transform(descriptions)
+                    classifier.fit(X, categories)
+                    logger.info("Модель успешно обучена с новыми данными из базы данных.")
+                else:
+                    logger.warning("Нет данных для обучения модели.")
+            except Exception as e:
+                logger.error(f"Ошибка при обучении модели: {e}")
         else:
             logger.error("Не удалось подключиться к базе данных для обучения модели.")
 
