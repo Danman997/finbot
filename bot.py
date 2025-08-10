@@ -1,18 +1,40 @@
 import os
-import logging
-import psycopg2
-from psycopg2 import sql
-from datetime import datetime, timedelta, timezone
-from dotenv import load_dotenv
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
-from telegram.ext import Application, CommandHandler, MessageHandler, ConversationHandler, ContextTypes, filters
-import matplotlib.pyplot as plt
 import io
 import re
-import schedule
 import time
+import logging
+import unicodedata
+from datetime import datetime, timedelta, timezone
 
-# --- Логирование ---
+import psycopg2
+from psycopg2 import sql
+from psycopg2 import errors as pg_errors
+
+from dotenv import load_dotenv
+
+from telegram import (
+    Update,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardRemove,
+)
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    ConversationHandler,
+    ContextTypes,
+    filters,
+)
+
+import matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
+import schedule
+
+# =========================
+# ЛОГИРОВАНИЕ
+# =========================
 log_directory = os.path.join(os.path.dirname(__file__), 'logs')
 os.makedirs(log_directory, exist_ok=True)
 log_file_path = os.path.join(log_directory, 'finbot.log')
@@ -21,39 +43,34 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(log_file_path),  # Логи будут записываться в logs/finbot.log
-        logging.StreamHandler()  # Логи также будут выводиться в консоль
+        logging.FileHandler(log_file_path, encoding='utf-8'),
+        logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
 
-# Загружаем переменные окружения из .env файла
+# =========================
+# ОКРУЖЕНИЕ
+# =========================
 load_dotenv()
 
-# --- Настройки бота ---
-BOT_TOKEN = os.environ.get('BOT_TOKEN') 
+BOT_TOKEN = os.getenv('BOT_TOKEN')
 if not BOT_TOKEN:
     logger.error("Ошибка: Токен бота не найден. Установите переменную окружения BOT_TOKEN.")
-    exit()
+    raise SystemExit(1)
 
-DATABASE_URL = os.environ.get('DATABASE_URL')
+DATABASE_URL = os.getenv('DATABASE_URL')
 if not DATABASE_URL:
     logger.error("Ошибка: URL базы данных не найден. Установите переменную окружения DATABASE_URL.")
-    exit()
-    
-# --- Классификация расходов: гибридный подход (словарь → фуззи → ML) ---
+    raise SystemExit(1)
+
+# =========================
+# КЛАССИФИКАЦИЯ (СЛОВАРЬ → ФУЗЗИ → ML)
+# =========================
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
-import numpy as np
-import pandas as pd
-import re
-import unicodedata
 
-# Если выше в файле больше не будет TRAINING_DATA – оставим пустой,
-# чтобы main() мог вызвать train_model(TRAINING_DATA) без ошибок.
-TRAINING_DATA = []
-
-# 1) Расширенный словарь категорий с синонимами/однокоренными
+# Базовый словарь категорий с синонимами/однокоренными
 CATEGORIES = {
     "Продукты": [
         "хлеб","батон","булочка","багет","лаваш","пицца","пирог","пирожок","печенье","торт","круассан","бублик","сухарики","пряники","крекер",
@@ -66,7 +83,6 @@ CATEGORIES = {
         "картофель","морковь","свекла","лук","чеснок","капуста","огурцы","помидоры","перец","баклажаны","кабачки","тыква",
         "укроп","петрушка","салат","шпинат","зелень",
         "сахар","соль","перец молотый","приправы","кетчуп","майонез","горчица",
-        # однокоренные/синонимы
         "продукты","продукт","продуктовый","прод","еда","питание","бакалея","молочка","выпечка","овощи","фрукты"
     ],
     "Одежда": [
@@ -120,18 +136,16 @@ CATEGORIES = {
     ]
 }
 
-# 2) Нормализация текста
 def normalize(text: str) -> str:
     if not text:
         return ""
     t = text.lower()
-    t = t.replace("ё","е")
+    t = t.replace("ё", "е")
     t = unicodedata.normalize("NFKC", t)
     t = re.sub(r"[^a-zа-я0-9\s\-_/\.]", " ", t)
     t = re.sub(r"\s+", " ", t).strip()
     return t
 
-# 3) Быстрый словарный матч (по подстроке любого ключа)
 def dict_match_category(text_norm: str) -> str | None:
     for cat, words in CATEGORIES.items():
         for w in words:
@@ -139,7 +153,6 @@ def dict_match_category(text_norm: str) -> str | None:
                 return cat
     return None
 
-# 4) Простой фуззи-матч (char trigram overlap) без внешних зависимостей
 def trigram_set(s: str) -> set[str]:
     s = f"  {s}  "
     return {s[i:i+3] for i in range(len(s)-2)}
@@ -159,10 +172,9 @@ def fuzzy_category(text_norm: str, threshold: float = 0.45) -> str | None:
                 best_score, best_cat = score, cat
     return best_cat if best_score >= threshold else None
 
-# 5) ML-модель (char n-grams устойчивы к опечаткам)
 vectorizer = TfidfVectorizer(
     analyzer="char_wb",
-    ngram_range=(3,5),
+    ngram_range=(3, 5),
     min_df=1,
     max_features=40000
 )
@@ -171,23 +183,15 @@ classifier = LogisticRegression(
     class_weight="balanced"
 )
 
-# Генерация обучающего набора из словаря + (опционально) TRAINING_DATA
+# Для совместимости со старым вызовом train_model(TRAINING_DATA)
+TRAINING_DATA = []
+
 BASE_TRAIN = []
 for cat, words in CATEGORIES.items():
     for w in words:
         BASE_TRAIN.append((w, cat))
 
-try:
-    if isinstance(TRAINING_DATA, list) and TRAINING_DATA:
-        BASE_TRAIN.extend(TRAINING_DATA)
-except NameError:
-    pass
-
 def train_model(data):
-    """
-    Совместимость с существующим вызовом train_model(TRAINING_DATA):
-    если data пустой — обучаемся на BASE_TRAIN.
-    """
     use_data = data if (isinstance(data, list) and len(data) > 0) else BASE_TRAIN
     if not use_data:
         logger.warning("Нет данных для обучения модели. Модель не будет обучена.")
@@ -198,52 +202,8 @@ def train_model(data):
     classifier.fit(X, categories)
     logger.info("Модель классификации (гибрид) успешно обучена.")
 
-# Обучаем (main() позже всё равно вызовет train_model(TRAINING_DATA))
 train_model(BASE_TRAIN)
 
-def classify_expense(description: str) -> str:
-    """
-    Возвращает категорию для расхода.
-    Порядок: словарь → фуззи → ML → 'Прочее'
-    """
-    try:
-        text_norm = normalize(description)
-
-        # 1) словарь
-        cat = dict_match_category(text_norm)
-        if cat:
-            return cat
-
-        # 2) фуззи
-        cat = fuzzy_category(text_norm)
-        if cat:
-            return cat
-
-        # 3) ML
-        if hasattr(classifier, "classes_") and len(getattr(classifier, "classes_", [])) > 0:
-            vec = vectorizer.transform([text_norm])
-            pred = classifier.predict(vec)[0]
-            return pred
-
-        # 4) fallback
-        return "Прочее"
-    except Exception as e:
-        logger.error(f"Ошибка при классификации: {e}. Возвращаю 'Прочее'.")
-        return "Прочее"
-
-
-def classify_expense(description):
-    try:
-        if not hasattr(classifier, 'classes_') or len(classifier.classes_) == 0:
-            return 'Прочее'
-        description_vectorized = vectorizer.transform([description.lower()])
-        prediction = classifier.predict(description_vectorized)[0]
-        return prediction
-    except Exception as e:
-        logger.error(f"Ошибка при классификации: {e}. Возвращаю 'Прочее'.")
-        return 'Прочее'
-
-# --- Функции для работы с базой данных ---
 def get_db_connection():
     try:
         conn = psycopg2.connect(DATABASE_URL)
@@ -252,33 +212,145 @@ def get_db_connection():
         logger.error(f"Ошибка подключения к БД: {e}")
         return None
 
+def get_override_category(description: str) -> str | None:
+    """Проверяем таблицу category_overrides: если для нормализованного описания есть ручное правило — используем его."""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return None
+        cur = conn.cursor()
+        norm = normalize(description)
+        cur.execute("SELECT category FROM category_overrides WHERE norm_desc = %s LIMIT 1;", (norm,))
+        row = cur.fetchone()
+        conn.close()
+        return row[0] if row else None
+    except Exception as e:
+        logger.error(f"Ошибка чтения override из БД: {e}")
+        return None
+
+def classify_expense(description: str) -> str:
+    """
+    Порядок: 0) ручной override в БД → 1) словарь → 2) фуззи → 3) ML → 4) 'Прочее'
+    """
+    try:
+        # 0) ручное переопределение (обучение на правках)
+        cat = get_override_category(description)
+        if cat:
+            logger.info(f"[override] '{description}' -> {cat}")
+            return cat
+
+        text_norm = normalize(description)
+
+        # 1) словарь
+        cat = dict_match_category(text_norm)
+        if cat:
+            logger.info(f"[dict] '{description}' -> {cat}")
+            return cat
+
+        # 2) фуззи
+        cat = fuzzy_category(text_norm)
+        if cat:
+            logger.info(f"[fuzzy] '{description}' -> {cat}")
+            return cat
+
+        # 3) ML
+        if hasattr(classifier, "classes_") and len(getattr(classifier, "classes_", [])) > 0:
+            vec = vectorizer.transform([text_norm])
+            pred = classifier.predict(vec)[0]
+            logger.info(f"[ml] '{description}' -> {pred}")
+            return pred
+
+        # 4) fallback
+        logger.info(f"[fallback] '{description}' -> Прочее")
+        return "Прочее"
+    except Exception as e:
+        logger.error(f"Ошибка при классификации: {e}. Возвращаю 'Прочее'.")
+        return "Прочее"
+
+# =========================
+# БАЗА ДАННЫХ (DDL/CRUD)
+# =========================
 def init_db():
     conn = get_db_connection()
-    if conn:
-        cursor = conn.cursor()
-        # Удаляем user_id и family_id если есть
+    if not conn:
+        return
+    cursor = conn.cursor()
+    try:
+        # Чистим старые столбцы, если есть
         for col in ['user_id', 'family_id']:
             try:
                 cursor.execute(f"ALTER TABLE expenses DROP COLUMN {col};")
                 conn.commit()
                 logger.info(f"Столбец {col} успешно удален из таблицы expenses.")
-            except psycopg2.errors.UndefinedColumn:
+            except pg_errors.UndefinedColumn:
                 conn.rollback()
             except Exception as e:
                 conn.rollback()
                 logger.error(f"Ошибка при удалении столбца {col}: {e}")
+
+        # Основная таблица расходов
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS expenses (
                 id SERIAL PRIMARY KEY,
                 amount NUMERIC(10, 2) NOT NULL,
                 description TEXT,
                 category VARCHAR(100) NOT NULL,
-                transaction_date TIMESTAMP WITH TIME ZONE NOT NULL
+                transaction_date TIMESTAMPTZ NOT NULL,
+                predicted_category VARCHAR(100)
             );
         ''')
         conn.commit()
+
+        # Таблица переопределений
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS category_overrides (
+                id SERIAL PRIMARY KEY,
+                norm_desc TEXT NOT NULL UNIQUE,
+                category  VARCHAR(100) NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            );
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_category_overrides_norm ON category_overrides (norm_desc);')
+        conn.commit()
+
+        # Функция-триггер: учимся на ручных правках категорий
+        cursor.execute("""
+        CREATE OR REPLACE FUNCTION learn_override_from_edit() RETURNS trigger AS $$
+        DECLARE
+          norm TEXT;
+        BEGIN
+          IF TG_OP = 'UPDATE' AND NEW.category IS DISTINCT FROM OLD.category THEN
+            norm := lower(
+                      regexp_replace(
+                        translate(NEW.description, 'Ёё', 'Ее'),
+                        '[^a-zA-Zа-яА-Я0-9\\s\\-\\_\\/\\.]', ' ', 'g'
+                      )
+                    );
+            norm := regexp_replace(norm, '\\s+', ' ', 'g');
+
+            INSERT INTO category_overrides(norm_desc, category)
+            VALUES (norm, NEW.category)
+            ON CONFLICT (norm_desc)
+              DO UPDATE SET category = EXCLUDED.category, created_at = now();
+          END IF;
+          RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+        """)
+        conn.commit()
+
+        cursor.execute("DROP TRIGGER IF EXISTS trg_learn_override ON expenses;")
+        cursor.execute("""
+        CREATE TRIGGER trg_learn_override
+        AFTER UPDATE OF category ON expenses
+        FOR EACH ROW
+        EXECUTE FUNCTION learn_override_from_edit();
+        """)
+        conn.commit()
+
+        logger.info("База данных инициализирована (expenses/category_overrides/trigger созданы/проверены).")
+    finally:
         conn.close()
-        logger.info("База данных инициализирована (таблица 'expenses' проверена/создана).")
 
 def add_expense(amount, category, description, transaction_date):
     conn = get_db_connection()
@@ -286,10 +358,20 @@ def add_expense(amount, category, description, transaction_date):
         return False
     try:
         cursor = conn.cursor()
+        # сохраняем и предсказание модели для аудита
+        try:
+            text_norm = normalize(description)
+            if hasattr(classifier, 'classes_') and len(classifier.classes_) > 0:
+                pred = classifier.predict(vectorizer.transform([text_norm]))[0]
+            else:
+                pred = category
+        except Exception:
+            pred = category
+
         cursor.execute('''
-            INSERT INTO expenses (amount, category, description, transaction_date)
-            VALUES (%s, %s, %s, %s)
-        ''', (amount, category, description, transaction_date))
+            INSERT INTO expenses (amount, category, description, transaction_date, predicted_category)
+            VALUES (%s, %s, %s, %s, %s)
+        ''', (amount, category, description, transaction_date, pred))
         conn.commit()
         return True
     except Exception as e:
@@ -298,7 +380,9 @@ def add_expense(amount, category, description, transaction_date):
     finally:
         conn.close()
 
-# --- UI (User Interface) ---
+# =========================
+# UI КЛАВИАТУРЫ
+# =========================
 def get_main_menu_keyboard():
     keyboard = [
         [KeyboardButton("💸 Добавить расход"), KeyboardButton("📊 Отчеты")]
@@ -312,9 +396,12 @@ def get_report_period_keyboard():
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
 
-# --- Команды бота ---
+# =========================
+# КОМАНДЫ/ХЕНДЛЕРЫ
+# =========================
+PERIOD_CHOICE_STATE = 1
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Отвечает на команду /start."""
     await update.message.reply_text(
         "Привет! Я твой помощник по учету расходов. Выбери опцию ниже:",
         reply_markup=get_main_menu_keyboard()
@@ -325,7 +412,29 @@ async def report_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         "За какой период вы хотите отчет?",
         reply_markup=get_report_period_keyboard()
     )
-    return PERIOD_CHOICE_STATE  # Важно! Переводим в состояние выбора периода
+    return PERIOD_CHOICE_STATE
+
+def parse_date_period(text):
+    text_lower = text.lower()
+    start_date = None
+    end_date = datetime.now(timezone.utc)
+    current_time_aware = datetime.now(timezone.utc)
+
+    if 'сегодня' in text_lower:
+        start_date = current_time_aware.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_date = start_date + timedelta(days=1, microseconds=-1)
+    elif 'неделя' in text_lower:
+        start_date = (current_time_aware - timedelta(days=current_time_aware.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+        end_date = current_time_aware.replace(hour=23, minute=59, second=59, microsecond=999999)
+    elif 'месяц' in text_lower:
+        start_date = current_time_aware.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        end_date = current_time_aware.replace(hour=23, minute=59, second=59, microsecond=999999)
+    elif 'год' in text_lower:
+        start_date = current_time_aware.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        end_date = current_time_aware.replace(hour=23, minute=59, second=59, microsecond=999999)
+    else:
+        start_date = None
+    return start_date, end_date
 
 async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     period_text = update.message.text.lower()
@@ -358,7 +467,7 @@ async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("За выбранный период нет расходов.", reply_markup=get_main_menu_keyboard())
         return ConversationHandler.END
 
-    # Создание DataFrame с полными данными
+    # Создание DataFrame с полными данными (ОТЧЁТЫ — НЕ МЕНЯЕМ)
     try:
         df = pd.DataFrame(data, columns=['Описание', 'Категория', 'Сумма', 'Дата транзакции'])
         grouped_data = df.groupby('Категория', as_index=False)['Сумма'].sum().sort_values(by='Сумма', ascending=False)
@@ -369,18 +478,17 @@ async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.error(f"Ошибка при создании DataFrame: {e}")
         return ConversationHandler.END
 
-    # Создание Excel файла
+    # Excel
     excel_buf = io.BytesIO()
     df.to_excel(excel_buf, index=False, engine='xlsxwriter')
     excel_buf.seek(0)
 
-    # График
+    # График (ОТЧЁТЫ — НЕ МЕНЯЕМ)
     fig, ax = plt.subplots(figsize=(8, 8))
     wedges, texts, autotexts = ax.pie(amounts, labels=None, autopct='%1.1f%%', startangle=90, pctdistance=0.85)
     ax.axis('equal')
     plt.title(f'Отчет о расходах за {period_text.capitalize()} (Тг)')
 
-    # Легенда снизу
     legend_labels = [f"{cat} — {amt:.2f} Тг" for cat, amt in zip(categories, amounts)]
     plt.legend(wedges, legend_labels, title="Категории", loc="lower center", bbox_to_anchor=(0.5, -0.15), fontsize=12)
 
@@ -389,62 +497,37 @@ async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     buf.seek(0)
     plt.close(fig)
 
-    # Текстовая таблица для подписи
     table_text = "\n".join([f"{cat}: {amt:.2f} Тг" for cat, amt in zip(categories, amounts)])
     table_text += f"\n\nИтого: {total:.2f} Тг"
 
-    # Отправка графика и подписи
     await update.message.reply_photo(photo=buf, caption=table_text, reply_markup=get_main_menu_keyboard())
-
-    # Отправка Excel файла
     await update.message.reply_document(document=excel_buf, filename=f"Отчет_{period_text}.xlsx")
     return ConversationHandler.END
 
-def parse_date_period(text):
-    text_lower = text.lower()
-    start_date = None
-    end_date = datetime.now(timezone.utc)
-    current_time_aware = datetime.now(timezone.utc)
-
-    if 'сегодня' in text_lower:
-        start_date = current_time_aware.replace(hour=0, minute=0, second=0, microsecond=0)
-        end_date = start_date + timedelta(days=1, microseconds=-1)
-    elif 'неделя' in text_lower:
-        start_date = (current_time_aware - timedelta(days=current_time_aware.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
-        end_date = current_time_aware.replace(hour=23, minute=59, second=59, microsecond=999999)
-    elif 'месяц' in text_lower:
-        start_date = current_time_aware.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        end_date = current_time_aware.replace(hour=23, minute=59, second=59, microsecond=999999)
-    elif 'год' in text_lower:
-        start_date = current_time_aware.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
-        end_date = current_time_aware.replace(hour=23, minute=59, second=59, microsecond=999999)
-    else:
-        start_date = None
-    return start_date, end_date
-
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    text = update.message.text.strip()
-    if text in ["💸 Добавить расход", "📊 Отчеты", "Сегодня", "Неделя", "Месяц", "Год"]:
+    text_msg = update.message.text.strip()
+    if text_msg in ["💸 Добавить расход", "📊 Отчеты", "Сегодня", "Неделя", "Месяц", "Год"]:
         return
 
-    logger.info(f"Получено сообщение: {text}")
+    logger.info(f"Получено сообщение: {text_msg}")
 
-    match = re.match(r"(.+?)\s+(\d+[.,]?\d*)$", text)
+    # Ожидаем формат "Описание Сумма"
+    match = re.match(r"(.+?)\s+(\d+[.,]?\d*)$", text_msg)
     if not match:
         await update.message.reply_text(
             "Неверный формат. Используйте: 'Описание Сумма' (например, 'Обед в кафе 150').",
             reply_markup=get_main_menu_keyboard()
         )
         return
-    
+
     description = match.group(1).strip()
     amount_str = match.group(2).replace(',', '.')
-    
+
     try:
         amount = float(amount_str)
         category = classify_expense(description)
         transaction_date = datetime.now(timezone.utc)
-        if add_expense(amount, category, description, transaction_date): 
+        if add_expense(amount, category, description, transaction_date):
             await update.message.reply_text(
                 f"✅ Расход '{description}' ({amount:.2f}) записан в категорию '{category}'!",
                 reply_markup=get_main_menu_keyboard()
@@ -463,12 +546,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         logger.error(f"Непредвиденная ошибка при обработке сообщения: {e}")
         await update.message.reply_text(f"Произошла непредвиденная ошибка: {e}", reply_markup=get_main_menu_keyboard())
 
-# --- Главная функция запуска бота ---
-PERIOD_CHOICE_STATE = 1
-
+# =========================
+# MAIN + ежедневное дообучение
+# =========================
 def main():
-    train_model(TRAINING_DATA)
+    train_model(TRAINING_DATA)  # совместимость — обучит на BASE_TRAIN при пустом списке
     init_db()
+
     application = Application.builder().token(BOT_TOKEN).build()
 
     report_conv_handler = ConversationHandler(
@@ -482,13 +566,15 @@ def main():
         fallbacks=[MessageHandler(filters.TEXT & ~filters.COMMAND, start)],
         allow_reentry=True
     )
+
     application.add_handler(report_conv_handler)
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
     logger.info("Бот запущен!")
     application.run_polling()
 
-    # Функция для ежедневного обучения модели
+    # === Ежедневное обучение (останется, как у вас было; сработает после остановки polling) ===
     def daily_training():
         conn = get_db_connection()
         if conn:
@@ -499,8 +585,8 @@ def main():
                 conn.close()
 
                 if data:
-                    logger.info(f"Данные для обучения модели: {data}")
-                    descriptions = [row[0].lower() for row in data]  # Приведение описаний к нижнему регистру
+                    logger.info(f"Данные для обучения модели: {len(data)} записей")
+                    descriptions = [normalize(row[0]) for row in data]
                     categories = [row[1] for row in data]
                     X = vectorizer.fit_transform(descriptions)
                     classifier.fit(X, categories)
@@ -512,10 +598,8 @@ def main():
         else:
             logger.error("Не удалось подключиться к базе данных для обучения модели.")
 
-    # Планирование ежедневного обучения
     schedule.every().day.at("00:00").do(daily_training)
 
-    # Запуск планировщика в отдельном потоке
     while True:
         schedule.run_pending()
         time.sleep(1)
