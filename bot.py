@@ -13,7 +13,14 @@ import schedule
 import time
 
 # --- Логирование ---
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("finbot.log"),  # Логи будут записываться в файл finbot.log
+        logging.StreamHandler()  # Логи также будут выводиться в консоль
+    ]
+)
 logger = logging.getLogger(__name__)
 
 # Загружаем переменные окружения из .env файла
