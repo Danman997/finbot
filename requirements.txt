@@ -6,4 +6,4 @@ scikit-learn
 python-dotenv
 xlsxwriter
 numpy
-schedule 
+schedule
