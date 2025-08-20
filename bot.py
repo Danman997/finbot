@@ -689,10 +689,24 @@ async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # Создание DataFrame с полными данными
     try:
         df = pd.DataFrame(data, columns=['Описание', 'Категория', 'Сумма', 'Дата транзакции'])
-        grouped_data = df.groupby('Категория', as_index=False)['Сумма'].sum().sort_values(by='Сумма', ascending=False)
-        categories = grouped_data['Категория'].tolist()
-        amounts = grouped_data['Сумма'].tolist()
+        df['Месяц'] = pd.to_datetime(df['Дата транзакции']).dt.strftime('%b')
+        df['День недели'] = pd.to_datetime(df['Дата транзакции']).dt.strftime('%a')
+        
+        # Группировка данных для различных графиков
+        grouped_by_category = df.groupby('Категория', as_index=False)['Сумма'].sum().sort_values(by='Сумма', ascending=False)
+        grouped_by_month = df.groupby('Месяц', as_index=False)['Сумма'].sum()
+        grouped_by_weekday = df.groupby('День недели', as_index=False)['Сумма'].sum()
+        
+        categories = grouped_by_category['Категория'].tolist()
+        amounts = grouped_by_category['Сумма'].tolist()
         total = df['Сумма'].sum()
+        
+        # Статистика
+        avg_expense = df['Сумма'].mean()
+        max_expense = df['Сумма'].max()
+        min_expense = df['Сумма'].min()
+        total_transactions = len(df)
+        
     except Exception as e:
         logger.error(f"Ошибка при создании DataFrame: {e}")
         return ConversationHandler.END
@@ -702,27 +716,178 @@ async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     df.to_excel(excel_buf, index=False, engine='xlsxwriter')
     excel_buf.seek(0)
 
-    # График
-    fig, ax = plt.subplots(figsize=(8, 8))
-    wedges, texts, autotexts = ax.pie(amounts, labels=None, autopct='%1.1f%%', startangle=90, pctdistance=0.85)
-    ax.axis('equal')
-    plt.title(f'Отчет о расходах за {period_text.capitalize()} (Тг)')
-
-    # Легенда снизу
-    legend_labels = [f"{cat} — {amt:.2f} Тг" for cat, amt in zip(categories, amounts)]
-    plt.legend(wedges, legend_labels, title="Категории", loc="lower center", bbox_to_anchor=(0.5, -0.15), fontsize=12)
-
+    # Создание комплексного дашборда
+    fig = plt.figure(figsize=(20, 16))
+    fig.patch.set_facecolor('#1a1a1a')  # Темный фон
+    
+    # Настройка стиля
+    plt.style.use('dark_background')
+    
+    # Цветовая палитра
+    colors = ['#00ff88', '#00d4ff', '#ff6b6b', '#4ecdc4', '#45b7d1', '#96ceb4', '#feca57', '#ff9ff3', '#54a0ff', '#5f27cd']
+    
+    # Верхний ряд - KPI метрики
+    gs = fig.add_gridspec(4, 4, hspace=0.3, wspace=0.3)
+    
+    # 1. Общие расходы (полукруговая диаграмма)
+    ax1 = fig.add_subplot(gs[0, 0])
+    ax1.pie([total, max_expense * 10], labels=['', ''], colors=['#00ff88', '#1a1a1a'], 
+             startangle=90, counterclock=False, radius=0.8)
+    ax1.text(0, 0, f'Общие\nрасходы\n{total:.0f} Тг', ha='center', va='center', 
+              fontsize=14, fontweight='bold', color='white')
+    ax1.set_title('ОБЩИЕ РАСХОДЫ', color='white', fontsize=12, fontweight='bold', pad=20)
+    
+    # 2. Средний расход
+    ax2 = fig.add_subplot(gs[0, 1])
+    ax2.pie([avg_expense, max_expense * 5], labels=['', ''], colors=['#00d4ff', '#1a1a1a'], 
+             startangle=90, counterclock=False, radius=0.8)
+    ax2.text(0, 0, f'Средний\nрасход\n{avg_expense:.0f} Тг', ha='center', va='center', 
+              fontsize=14, fontweight='bold', color='white')
+    ax2.set_title('СРЕДНИЙ РАСХОД', color='white', fontsize=12, fontweight='bold', pad=20)
+    
+    # 3. Количество транзакций
+    ax3 = fig.add_subplot(gs[0, 2])
+    ax3.pie([total_transactions, 100], labels=['', ''], colors=['#ff6b6b', '#1a1a1a'], 
+             startangle=90, counterclock=False, radius=0.8)
+    ax3.text(0, 0, f'Транзакции\n{total_transactions}', ha='center', va='center', 
+              fontsize=14, fontweight='bold', color='white')
+    ax3.set_title('ТРАНЗАКЦИИ', color='white', fontsize=12, fontweight='bold', pad=20)
+    
+    # 4. Максимальный расход
+    ax4 = fig.add_subplot(gs[0, 3])
+    ax4.pie([max_expense, max_expense * 2], labels=['', ''], colors=['#4ecdc4', '#1a1a1a'], 
+             startangle=90, counterclock=False, radius=0.8)
+    ax4.text(0, 0, f'Макс.\nрасход\n{max_expense:.0f} Тг', ha='center', va='center', 
+              fontsize=14, fontweight='bold', color='white')
+    ax4.set_title('МАКСИМАЛЬНЫЙ РАСХОД', color='white', fontsize=12, fontweight='bold', pad=20)
+    
+    # Средний ряд - Анализ по месяцам и категориям
+    
+    # 5. Расходы по месяцам (столбчатая диаграмма)
+    ax5 = fig.add_subplot(gs[1, :2])
+    months = grouped_by_month['Месяц'].tolist()
+    month_amounts = grouped_by_month['Сумма'].tolist()
+    
+    bars = ax5.bar(months, month_amounts, color=colors[:len(months)], alpha=0.8)
+    ax5.set_title('РАСХОДЫ ПО МЕСЯЦАМ', color='white', fontsize=14, fontweight='bold', pad=20)
+    ax5.set_ylabel('Сумма (Тг)', color='white', fontsize=12)
+    ax5.set_xlabel('Месяц', color='white', fontsize=12)
+    ax5.tick_params(colors='white')
+    ax5.grid(True, alpha=0.3)
+    
+    # Добавляем значения на столбцы
+    for bar, amount in zip(bars, month_amounts):
+        height = bar.get_height()
+        ax5.text(bar.get_x() + bar.get_width()/2., height + max(month_amounts)*0.01,
+                 f'{amount:.0f}', ha='center', va='bottom', color='white', fontweight='bold')
+    
+    # 6. Анализ по категориям (кольцевая диаграмма)
+    ax6 = fig.add_subplot(gs[1, 2:])
+    wedges, texts, autotexts = ax6.pie(amounts, labels=None, autopct='%1.1f%%', 
+                                        startangle=90, pctdistance=0.85, colors=colors[:len(amounts)],
+                                        wedgeprops=dict(width=0.5))
+    ax6.set_title('АНАЛИЗ ПО КАТЕГОРИЯМ\nРАСХОДЫ ПО КАТЕГОРИЯМ', color='white', fontsize=14, fontweight='bold', pad=20)
+    
+    # Центральный текст
+    ax6.text(0, 0, f'РАСХОДЫ\n{total:.0f} Тг', ha='center', va='center', 
+              fontsize=16, fontweight='bold', color='white')
+    
+    # Легенда справа
+    legend_labels = [f"{cat} — {amt:.0f} Тг" for cat, amt in zip(categories, amounts)]
+    ax6.legend(wedges, legend_labels, title="Категории", loc="center left", 
+               bbox_to_anchor=(1.1, 0.5), fontsize=10, title_fontsize=12)
+    
+    # Нижний ряд - Дополнительная аналитика
+    
+    # 7. Расходы по дням недели
+    ax7 = fig.add_subplot(gs[2, :2])
+    weekdays = grouped_by_weekday['День недели'].tolist()
+    weekday_amounts = grouped_by_weekday['Сумма'].tolist()
+    
+    bars = ax7.bar(weekdays, weekday_amounts, color=colors[5:5+len(weekdays)], alpha=0.8)
+    ax7.set_title('РАСХОДЫ ПО ДНЯМ НЕДЕЛИ', color='white', fontsize=14, fontweight='bold', pad=20)
+    ax7.set_ylabel('Сумма (Тг)', color='white', fontsize=12)
+    ax7.set_xlabel('День недели', color='white', fontsize=12)
+    ax7.tick_params(colors='white')
+    ax7.grid(True, alpha=0.3)
+    
+    # Добавляем значения на столбцы
+    for bar, amount in zip(bars, weekday_amounts):
+        height = bar.get_height()
+        ax7.text(bar.get_x() + bar.get_width()/2., height + max(weekday_amounts)*0.01,
+                 f'{amount:.0f}', ha='center', va='bottom', color='white', fontweight='bold')
+    
+    # 8. Топ-5 категорий (горизонтальная столбчатая диаграмма)
+    ax8 = fig.add_subplot(gs[2, 2:])
+    top_categories = categories[:5]
+    top_amounts = amounts[:5]
+    
+    bars = ax8.barh(top_categories, top_amounts, color=colors[:5], alpha=0.8)
+    ax8.set_title('ТОП-5 КАТЕГОРИЙ', color='white', fontsize=14, fontweight='bold', pad=20)
+    ax8.set_xlabel('Сумма (Тг)', color='white', fontsize=12)
+    ax8.tick_params(colors='white')
+    ax8.grid(True, alpha=0.3)
+    
+    # Добавляем значения на столбцы
+    for bar, amount in zip(bars, top_amounts):
+        width = bar.get_width()
+        ax8.text(width + max(top_amounts)*0.01, bar.get_y() + bar.get_height()/2.,
+                 f'{amount:.0f}', ha='left', va='center', color='white', fontweight='bold')
+    
+    # 9. Статистика и сводка
+    ax9 = fig.add_subplot(gs[3, :])
+    ax9.axis('off')
+    
+    # Создаем таблицу со статистикой
+    stats_data = [
+        ['📊 Общая статистика', ''],
+        ['💰 Общие расходы:', f'{total:.2f} Тг'],
+        ['📈 Средний расход:', f'{avg_expense:.2f} Тг'],
+        ['🔥 Максимальный расход:', f'{max_expense:.2f} Тг'],
+        ['❄️ Минимальный расход:', f'{min_expense:.2f} Тг'],
+        ['🔄 Количество транзакций:', f'{total_transactions}'],
+        ['📅 Период:', period_text.capitalize()],
+        ['🏷️ Категорий:', f'{len(categories)}']
+    ]
+    
+    table = ax9.table(cellText=stats_data, cellLoc='left', loc='center',
+                      colWidths=[0.4, 0.3], cellColours=[['#2d2d2d', '#2d2d2d']] * len(stats_data))
+    table.auto_set_font_size(False)
+    table.set_fontsize(12)
+    table.scale(1, 2)
+    
+    # Стилизация таблицы
+    for i in range(len(stats_data)):
+        for j in range(2):
+            cell = table[(i, j)]
+            cell.set_text_props(color='white', weight='bold' if i == 0 else 'normal')
+            if i == 0:  # Заголовок
+                cell.set_facecolor('#00ff88')
+                cell.set_text_props(color='black', weight='bold')
+    
+    # Общий заголовок дашборда
+    fig.suptitle(f'ДАШБОРД РАСХОДОВ ЗА {period_text.upper()}', 
+                 fontsize=24, fontweight='bold', color='white', y=0.98)
+    
+    # Сохранение графика
     buf = io.BytesIO()
-    plt.savefig(buf, format='png', bbox_inches='tight', dpi=150)
+    plt.savefig(buf, format='png', bbox_inches='tight', dpi=150, 
+                facecolor='#1a1a1a', edgecolor='none')
     buf.seek(0)
     plt.close(fig)
 
-    # Текстовая таблица для подписи
-    table_text = "\n".join([f"{cat}: {amt:.2f} Тг" for cat, amt in zip(categories, amounts)])
-    table_text += f"\n\nИтого: {total:.2f} Тг"
+    # Текстовая сводка
+    summary_text = f"📊 ОТЧЕТ ЗА {period_text.upper()}\n\n"
+    summary_text += f"💰 Общие расходы: {total:.2f} Тг\n"
+    summary_text += f"📈 Средний расход: {avg_expense:.2f} Тг\n"
+    summary_text += f"🔄 Транзакций: {total_transactions}\n"
+    summary_text += f"🏷️ Категорий: {len(categories)}\n\n"
+    summary_text += "📋 Топ категории:\n"
+    for i, (cat, amt) in enumerate(zip(categories[:5], amounts[:5]), 1):
+        summary_text += f"{i}. {cat}: {amt:.2f} Тг\n"
 
-    # Отправка графика и подписи
-    await update.message.reply_photo(photo=buf, caption=table_text, reply_markup=get_main_menu_keyboard())
+    # Отправка дашборда и сводки
+    await update.message.reply_photo(photo=buf, caption=summary_text, reply_markup=get_main_menu_keyboard())
 
     # Отправка Excel файла
     await update.message.reply_document(document=excel_buf, filename=f"Отчет_{period_text}.xlsx")
