@@ -67,7 +67,7 @@ CATEGORIES = {
         "укроп","петрушка","салат","шпинат","зелень",
         "сахар","соль","перец молотый","приправы","кетчуп","майонез","горчица",
         # однокоренные/синонимы
-        "продукты","продукт","продуктовый","прод","еда","питание","бакалея","молочка","выпечка","овощи","фрукты"
+        "продукты","продукт","продуктывый","прод","еда","питание","бакалея","молочка","выпечка","овощи","фрукты"
     ],
     "Одежда": [
         "футболка","рубашка","кофта","свитер","толстовка","пиджак","жилет","пальто","куртка","плащ","шуба",
@@ -291,6 +291,8 @@ def init_db():
             except Exception as e:
                 conn.rollback()
                 logger.error(f"Ошибка при удалении столбца {col}: {e}")
+        
+        # Создаем таблицу расходов
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS expenses (
                 id SERIAL PRIMARY KEY,
@@ -300,9 +302,26 @@ def init_db():
                 transaction_date TIMESTAMP WITH TIME ZONE NOT NULL
             );
         ''')
+        
+        # Создаем таблицу напоминаний
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS payment_reminders (
+                id SERIAL PRIMARY KEY,
+                title VARCHAR(200) NOT NULL,
+                description TEXT,
+                amount NUMERIC(10, 2) NOT NULL,
+                start_date DATE NOT NULL,
+                end_date DATE NOT NULL,
+                reminder_10_days BOOLEAN DEFAULT FALSE,
+                reminder_3_days BOOLEAN DEFAULT FALSE,
+                is_active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            );
+        ''')
+        
         conn.commit()
         conn.close()
-        logger.info("База данных инициализирована (таблица 'expenses' проверена/создана).")
+        logger.info("База данных инициализирована (таблицы 'expenses' и 'payment_reminders' проверены/созданы).")
 
 def add_expense(amount, category, description, transaction_date):
     conn = get_db_connection()
@@ -413,11 +432,181 @@ def get_all_expenses_for_training():
     finally:
         conn.close()
 
+# --- Функции для работы с напоминаниями ---
+def add_payment_reminder(title, description, amount, start_date, end_date):
+    """Добавить новое напоминание о платеже"""
+    conn = get_db_connection()
+    if not conn:
+        return False
+    try:
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO payment_reminders (title, description, amount, start_date, end_date)
+            VALUES (%s, %s, %s, %s, %s)
+        ''', (title, description, amount, start_date, end_date))
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка при добавлении напоминания: {e}")
+        return False
+    finally:
+        conn.close()
+
+def get_all_active_reminders():
+    """Получить все активные напоминания"""
+    conn = get_db_connection()
+    if not conn:
+        return []
+    try:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT id, title, description, amount, start_date, end_date, 
+                   reminder_10_days, reminder_3_days, created_at
+            FROM payment_reminders 
+            WHERE is_active = TRUE 
+            ORDER BY end_date ASC
+        ''')
+        return cursor.fetchall()
+    except Exception as e:
+        logger.error(f"Ошибка при получении напоминаний: {e}")
+        return []
+    finally:
+        conn.close()
+
+def get_upcoming_reminders(days_ahead=30):
+    """Получить напоминания, которые скоро истекают"""
+    conn = get_db_connection()
+    if not conn:
+        return []
+    try:
+        cursor = conn.cursor()
+        future_date = datetime.now().date() + timedelta(days=days_ahead)
+        cursor.execute('''
+            SELECT id, title, description, amount, start_date, end_date, 
+                   reminder_10_days, reminder_3_days
+            FROM payment_reminders 
+            WHERE is_active = TRUE AND end_date <= %s
+            ORDER BY end_date ASC
+        ''', (future_date,))
+        return cursor.fetchall()
+    except Exception as e:
+        logger.error(f"Ошибка при получении предстоящих напоминаний: {e}")
+        return []
+    finally:
+        conn.close()
+
+def mark_reminder_sent(reminder_id, reminder_type):
+    """Отметить, что напоминание было отправлено"""
+    conn = get_db_connection()
+    if not conn:
+        return False
+    try:
+        cursor = conn.cursor()
+        if reminder_type == '10_days':
+            cursor.execute('''
+                UPDATE payment_reminders SET reminder_10_days = TRUE WHERE id = %s
+            ''', (reminder_id,))
+        elif reminder_type == '3_days':
+            cursor.execute('''
+                UPDATE payment_reminders SET reminder_3_days = TRUE WHERE id = %s
+            ''', (reminder_id,))
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка при обновлении статуса напоминания: {e}")
+        return False
+    finally:
+        conn.close()
+
+def deactivate_expired_reminder(reminder_id):
+    """Деактивировать истекшее напоминание"""
+    conn = get_db_connection()
+    if not conn:
+        return False
+    try:
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE payment_reminders SET is_active = FALSE WHERE id = %s
+        ''', (reminder_id,))
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка при деактивации напоминания: {e}")
+        return False
+    finally:
+        conn.close()
+
+def delete_reminder(reminder_id):
+    """Удалить напоминание"""
+    conn = get_db_connection()
+    if not conn:
+        return False
+    try:
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM payment_reminders WHERE id = %s', (reminder_id,))
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка при удалении напоминания: {e}")
+        return False
+    finally:
+        conn.close()
+
+async def check_and_send_reminders(application):
+    """Проверка и отправка автоматических напоминаний"""
+    try:
+        reminders = get_upcoming_reminders(15)  # Проверяем на 15 дней вперед
+        current_date = datetime.now().date()
+        
+        for reminder in reminders:
+            rem_id, title, desc, amount, start_date, end_date, sent_10, sent_3 = reminder
+            days_left = (end_date - current_date).days
+            
+            # Проверяем, нужно ли отправить напоминание за 10 дней
+            if days_left == 10 and not sent_10:
+                message_text = f"⚠️ НАПОМИНАНИЕ О ПЛАТЕЖЕ!\n\n"
+                message_text += f"📋 {title}\n"
+                if desc:
+                    message_text += f"📝 {desc}\n"
+                message_text += f"💰 Сумма: {amount:.2f} Тг\n"
+                message_text += f"📅 Срок действия истекает: {end_date.strftime('%d.%m.%Y')}\n"
+                message_text += f"⏰ Осталось дней: {days_left}\n\n"
+                message_text += f"💡 Не забудьте оплатить вовремя!"
+                
+                # Отправляем напоминание всем активным чатам
+                # В реальном боте здесь нужно получить список пользователей
+                # Пока что просто логируем
+                logger.info(f"Отправлено напоминание за 10 дней: {title}")
+                mark_reminder_sent(rem_id, '10_days')
+            
+            # Проверяем, нужно ли отправить напоминание за 3 дня
+            elif days_left == 3 and not sent_3:
+                message_text = f"🚨 СРОЧНОЕ НАПОМИНАНИЕ О ПЛАТЕЖЕ!\n\n"
+                message_text += f"📋 {title}\n"
+                if desc:
+                    message_text += f"📝 {desc}\n"
+                message_text += f"💰 Сумма: {amount:.2f} Тг\n"
+                message_text += f"📅 Срок действия истекает: {end_date.strftime('%d.%m.%Y')}\n"
+                message_text += f"⏰ Осталось дней: {days_left}\n\n"
+                message_text += f"🔥 Оплатите сегодня, чтобы не было проблем!"
+                
+                logger.info(f"Отправлено срочное напоминание за 3 дня: {title}")
+                mark_reminder_sent(rem_id, '3_days')
+            
+            # Деактивируем истекшие напоминания
+            elif days_left < 0:
+                deactivate_expired_reminder(rem_id)
+                logger.info(f"Деактивировано истекшее напоминание: {title}")
+                
+    except Exception as e:
+        logger.error(f"Ошибка при проверке напоминаний: {e}")
+
 # --- UI (User Interface) ---
 def get_main_menu_keyboard():
     keyboard = [
         [KeyboardButton("💸 Добавить расход"), KeyboardButton("📊 Отчеты")],
-        [KeyboardButton("🔧 Исправить категории"), KeyboardButton("📚 Обучить модель")]
+        [KeyboardButton("🔧 Исправить категории"), KeyboardButton("📚 Обучить модель")],
+        [KeyboardButton("⏰ Напоминания")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -655,6 +844,257 @@ async def manual_training(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             reply_markup=get_main_menu_keyboard()
         )
 
+# --- Функции для работы с напоминаниями ---
+async def reminder_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Главное меню напоминаний"""
+    text = update.message.text
+    
+    if text == "📝 Добавить напоминание":
+        await update.message.reply_text(
+            "Введите информацию о напоминании в формате:\n\n"
+            "Название | Описание | Сумма | Дата начала | Дата окончания\n\n"
+            "Например:\n"
+            "Автострахование | ОСАГО на машину | 25000 | 20.08.2025 | 19.08.2026\n\n"
+            "Или просто отправьте название:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return REMINDER_TITLE_STATE
+    
+    elif text == "📋 Список напоминаний":
+        reminders = get_all_active_reminders()
+        if not reminders:
+            await update.message.reply_text(
+                "У вас нет активных напоминаний.",
+                reply_markup=get_main_menu_keyboard()
+            )
+            return ConversationHandler.END
+        
+        reminders_text = "📋 Ваши активные напоминания:\n\n"
+        total_amount = 0
+        
+        for i, (rem_id, title, desc, amount, start_date, end_date, sent_10, sent_3, created) in enumerate(reminders, 1):
+            days_left = (end_date - datetime.now().date()).days
+            status = "🟢 Активно" if days_left > 0 else "🔴 Истекло"
+            
+            reminders_text += f"{i}. {title}\n"
+            if desc:
+                reminders_text += f"   📝 {desc}\n"
+            reminders_text += f"   💰 {amount:.2f} Тг\n"
+            reminders_text += f"   📅 {start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')}\n"
+            reminders_text += f"   {status} (осталось {days_left} дней)\n\n"
+            
+            total_amount += amount
+        
+        reminders_text += f"💰 Общая сумма к оплате: {total_amount:.2f} Тг"
+        
+        # Добавляем кнопки управления
+        keyboard = []
+        for i in range(0, len(reminders), 2):
+            row = [KeyboardButton(f"❌ Удалить {i+1}")]
+            if i + 1 < len(reminders):
+                row.append(KeyboardButton(f"❌ Удалить {i+2}"))
+            keyboard.append(row)
+        keyboard.append([KeyboardButton("🔙 Назад")])
+        
+        await update.message.reply_text(
+            reminders_text,
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+        context.user_data['reminders_list'] = reminders
+        return REMINDER_MANAGE_STATE
+    
+    elif text == "🔙 Назад":
+        await update.message.reply_text(
+            "Возвращаюсь в главное меню:",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+    
+    return ConversationHandler.END
+
+async def reminder_title_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка ввода названия напоминания"""
+    title = update.message.text.strip()
+    if not title:
+        await update.message.reply_text(
+            "Название не может быть пустым. Попробуйте снова:",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+    
+    context.user_data['reminder_title'] = title
+    
+    await update.message.reply_text(
+        f"Название: {title}\n\n"
+        "Теперь введите описание (или отправьте '-' если описание не нужно):",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return REMINDER_DESC_STATE
+
+async def reminder_desc_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка ввода описания напоминания"""
+    desc = update.message.text.strip()
+    if desc == '-':
+        desc = None
+    
+    context.user_data['reminder_desc'] = desc
+    
+    await update.message.reply_text(
+        f"Название: {context.user_data['reminder_title']}\n"
+        f"Описание: {desc or 'Не указано'}\n\n"
+        "Теперь введите сумму (например: 25000):",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return REMINDER_AMOUNT_STATE
+
+async def reminder_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка ввода суммы напоминания"""
+    try:
+        amount = float(update.message.text.replace(',', '.'))
+        if amount <= 0:
+            raise ValueError("Сумма должна быть положительной")
+    except ValueError:
+        await update.message.reply_text(
+            "Неверный формат суммы. Введите число больше 0:",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+    
+    context.user_data['reminder_amount'] = amount
+    
+    await update.message.reply_text(
+        f"Название: {context.user_data['reminder_title']}\n"
+        f"Описание: {context.user_data['reminder_desc'] or 'Не указано'}\n"
+        f"Сумма: {amount:.2f} Тг\n\n"
+        "Теперь введите дату начала в формате ДД.ММ.ГГГГ (например: 20.08.2025):",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return REMINDER_START_DATE_STATE
+
+async def reminder_start_date_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка ввода даты начала"""
+    try:
+        start_date = datetime.strptime(update.message.text, '%d.%m.%Y').date()
+    except ValueError:
+        await update.message.reply_text(
+            "Неверный формат даты. Используйте формат ДД.ММ.ГГГГ:",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+    
+    context.user_data['reminder_start_date'] = start_date
+    
+    await update.message.reply_text(
+        f"Название: {context.user_data['reminder_title']}\n"
+        f"Описание: {context.user_data['reminder_desc'] or 'Не указано'}\n"
+        f"Сумма: {context.user_data['reminder_amount']:.2f} Тг\n"
+        f"Дата начала: {start_date.strftime('%d.%m.%Y')}\n\n"
+        "Теперь введите дату окончания в формате ДД.ММ.ГГГГ (например: 19.08.2026):",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return REMINDER_END_DATE_STATE
+
+async def reminder_end_date_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка ввода даты окончания"""
+    try:
+        end_date = datetime.strptime(update.message.text, '%d.%m.%Y').date()
+        start_date = context.user_data['reminder_start_date']
+        
+        if end_date <= start_date:
+            await update.message.reply_text(
+                "Дата окончания должна быть позже даты начала. Попробуйте снова:",
+                reply_markup=get_main_menu_keyboard()
+            )
+            return ConversationHandler.END
+            
+    except ValueError:
+        await update.message.reply_text(
+            "Неверный формат даты. Используйте формат ДД.ММ.ГГГГ:",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+    
+    # Сохраняем напоминание в базу данных
+    title = context.user_data['reminder_title']
+    desc = context.user_data['reminder_desc']
+    amount = context.user_data['reminder_amount']
+    start_date = context.user_data['reminder_start_date']
+    
+    if add_payment_reminder(title, desc, amount, start_date, end_date):
+        days_left = (end_date - datetime.now().date()).days
+        
+        await update.message.reply_text(
+            f"✅ Напоминание успешно добавлено!\n\n"
+            f"📋 {title}\n"
+            f"📝 {desc or 'Описание не указано'}\n"
+            f"💰 {amount:.2f} Тг\n"
+            f"📅 {start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')}\n"
+            f"⏰ Осталось дней: {days_left}\n\n"
+            f"Бот будет напоминать о необходимости оплаты за 10 и 3 дня до истечения срока.",
+            reply_markup=get_main_menu_keyboard()
+        )
+    else:
+        await update.message.reply_text(
+            "❌ Ошибка при сохранении напоминания. Попробуйте снова.",
+            reply_markup=get_main_menu_keyboard()
+        )
+    
+    # Очищаем данные
+    context.user_data.clear()
+    return ConversationHandler.END
+
+async def reminder_manage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Управление напоминаниями (удаление)"""
+    text = update.message.text
+    
+    if text == "🔙 Назад":
+        await update.message.reply_text(
+            "Возвращаюсь в меню напоминаний:",
+            reply_markup=ReplyKeyboardMarkup([
+                ["📝 Добавить напоминание", "📋 Список напоминаний"], 
+                ["🔙 Назад"]
+            ], resize_keyboard=True)
+        )
+        return REMINDER_MENU_STATE
+    
+    # Проверяем формат "❌ Удалить N"
+    if text.startswith("❌ Удалить "):
+        try:
+            reminder_num = int(text.split()[-1]) - 1
+            reminders = context.user_data.get('reminders_list', [])
+            
+            if 0 <= reminder_num < len(reminders):
+                reminder = reminders[reminder_num]
+                reminder_id = reminder[0]
+                reminder_title = reminder[1]
+                
+                if delete_reminder(reminder_id):
+                    await update.message.reply_text(
+                        f"✅ Напоминание '{reminder_title}' успешно удалено!",
+                        reply_markup=get_main_menu_keyboard()
+                    )
+                    return ConversationHandler.END
+                else:
+                    await update.message.reply_text(
+                        "❌ Ошибка при удалении напоминания. Попробуйте снова.",
+                        reply_markup=get_main_menu_keyboard()
+                    )
+            else:
+                await update.message.reply_text(
+                    "Неверный номер напоминания.",
+                    reply_markup=get_main_menu_keyboard()
+                )
+                return ConversationHandler.END
+                
+        except (ValueError, IndexError):
+            await update.message.reply_text(
+                "Неверный формат команды.",
+                reply_markup=get_main_menu_keyboard()
+            )
+            return ConversationHandler.END
+    
+    return ConversationHandler.END
+
 async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     period_text = update.message.text.lower()
     start_date, end_date = parse_date_period(period_text)
@@ -885,7 +1325,20 @@ async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     summary_text += "📋 Топ категории:\n"
     for i, (cat, amt) in enumerate(zip(categories[:5], amounts[:5]), 1):
         summary_text += f"{i}. {cat}: {amt:.2f} Тг\n"
-
+    
+    # Добавляем информацию о предстоящих платежах
+    upcoming_reminders = get_upcoming_reminders(90)  # На 90 дней вперед
+    if upcoming_reminders:
+        summary_text += "\n⏰ ПРЕДСТОЯЩИЕ ПЛАТЕЖИ:\n"
+        total_upcoming = 0
+        for rem_id, title, desc, amount, start_date, end_date, sent_10, sent_3 in upcoming_reminders[:5]:  # Показываем топ-5
+            days_left = (end_date - datetime.now().date()).days
+            if days_left > 0:
+                summary_text += f"• {title}: {amount:.2f} Тг (через {days_left} дней)\n"
+                total_upcoming += amount
+        if total_upcoming > 0:
+            summary_text += f"💰 Общая сумма: {total_upcoming:.2f} Тг\n"
+    
     # Отправка дашборда и сводки
     await update.message.reply_photo(photo=buf, caption=summary_text, reply_markup=get_main_menu_keyboard())
 
@@ -924,6 +1377,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
     elif text == "📚 Обучить модель":
         await manual_training(update, context)
+        return
+    elif text == "⏰ Напоминания":
+        await reminder_menu(update, context)
         return
     elif text in ["💸 Добавить расход", "📊 Отчеты", "Сегодня", "Неделя", "Месяц", "Год"]:
         return
@@ -970,6 +1426,13 @@ PERIOD_CHOICE_STATE = 1
 EXPENSE_CHOICE_STATE = 2
 CATEGORY_CHOICE_STATE = 3
 AMOUNT_EDIT_STATE = 4
+REMINDER_MENU_STATE = 5
+REMINDER_TITLE_STATE = 6
+REMINDER_DESC_STATE = 7
+REMINDER_AMOUNT_STATE = 8
+REMINDER_START_DATE_STATE = 9
+REMINDER_END_DATE_STATE = 10
+REMINDER_MANAGE_STATE = 11
 
 def main():
     train_model(TRAINING_DATA)
@@ -1003,9 +1466,29 @@ def main():
         fallbacks=[MessageHandler(filters.TEXT & ~filters.COMMAND, start)],
         allow_reentry=True
     )
+
+    # Обработчик для напоминаний
+    reminder_conv_handler = ConversationHandler(
+        entry_points=[
+            MessageHandler(filters.Regex("^⏰ Напоминания$"), reminder_menu),
+            CommandHandler("reminders", reminder_menu)
+        ],
+        states={
+            REMINDER_MENU_STATE: [MessageHandler(filters.Regex("^(📝 Добавить напоминание|📋 Список напоминаний)$"), reminder_menu)],
+            REMINDER_TITLE_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_title_input)],
+            REMINDER_DESC_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_desc_input)],
+            REMINDER_AMOUNT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_amount_input)],
+            REMINDER_START_DATE_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_start_date_input)],
+            REMINDER_END_DATE_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_end_date_input)],
+            REMINDER_MANAGE_STATE: [MessageHandler(filters.Regex("^(❌ Удалить \d+|🔙 Назад)$"), reminder_manage)],
+        },
+        fallbacks=[MessageHandler(filters.TEXT & ~filters.COMMAND, start)],
+        allow_reentry=True
+    )
     
     application.add_handler(report_conv_handler)
     application.add_handler(correction_conv_handler)
+    application.add_handler(reminder_conv_handler)
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
@@ -1036,8 +1519,22 @@ def main():
         else:
             logger.error("Не удалось подключиться к базе данных для обучения модели.")
 
-    # Планирование ежедневного обучения
+    # Функция для ежедневной проверки напоминаний
+    def daily_reminder_check():
+        try:
+            # Создаем event loop для асинхронной функции
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(check_and_send_reminders(application))
+            loop.close()
+            logger.info("Ежедневная проверка напоминаний завершена.")
+        except Exception as e:
+            logger.error(f"Ошибка при ежедневной проверке напоминаний: {e}")
+
+    # Планирование ежедневных задач
     schedule.every().day.at("00:00").do(daily_training)
+    schedule.every().day.at("09:00").do(daily_reminder_check)  # Проверяем напоминания утром
 
     # Запуск планировщика в отдельном потоке
     while True:
