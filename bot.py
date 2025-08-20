@@ -67,7 +67,7 @@ CATEGORIES = {
         "укроп","петрушка","салат","шпинат","зелень",
         "сахар","соль","перец молотый","приправы","кетчуп","майонез","горчица",
         # однокоренные/синонимы
-        "продукты","продукт","продуктовый","прод","еда","питание","бакалея","молочка","выпечка","овощи","фрукты"
+        "продукты","продукт","продуктывый","прод","еда","питание","бакалея","молочка","выпечка","овощи","фрукты"
     ],
     "Одежда": [
         "футболка","рубашка","кофта","свитер","толстовка","пиджак","жилет","пальто","куртка","плащ","шуба",
@@ -192,11 +192,27 @@ def train_model(data):
     if not use_data:
         logger.warning("Нет данных для обучения модели. Модель не будет обучена.")
         return
-    descriptions = [normalize(item[0]) for item in use_data]
-    categories = [item[1] for item in use_data]
-    X = vectorizer.fit_transform(descriptions)
-    classifier.fit(X, categories)
-    logger.info("Модель классификации (гибрид) успешно обучена.")
+    
+    try:
+        descriptions = [normalize(item[0]) for item in use_data]
+        categories = [item[1] for item in use_data]
+        
+        # Обучаем модель
+        X = vectorizer.fit_transform(descriptions)
+        classifier.fit(X, categories)
+        
+        # Обновляем словарь категорий новыми примерами
+        for description, category in use_data:
+            if category in CATEGORIES:
+                desc_lower = description.lower().strip()
+                if desc_lower and desc_lower not in [w.lower() for w in CATEGORIES[category]]:
+                    CATEGORIES[category].append(desc_lower)
+                    logger.info(f"Добавлено в категорию '{category}': {desc_lower}")
+        
+        logger.info(f"Модель классификации (гибрид) успешно обучена на {len(use_data)} записях.")
+    except Exception as e:
+        logger.error(f"Ошибка при обучении модели: {e}")
+        raise
 
 # Обучаем (main() позже всё равно вызовет train_model(TRAINING_DATA))
 train_model(BASE_TRAIN)
@@ -286,10 +302,84 @@ def add_expense(amount, category, description, transaction_date):
     finally:
         conn.close()
 
+def get_expense_by_id(expense_id):
+    """Получить расход по ID"""
+    conn = get_db_connection()
+    if not conn:
+        return None
+    try:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT id, amount, description, category, transaction_date
+            FROM expenses WHERE id = %s
+        ''', (expense_id,))
+        return cursor.fetchone()
+    except Exception as e:
+        logger.error(f"Ошибка при получении расхода: {e}")
+        return None
+    finally:
+        conn.close()
+
+def update_expense_category(expense_id, new_category):
+    """Обновить категорию расхода"""
+    conn = get_db_connection()
+    if not conn:
+        return False
+    try:
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE expenses SET category = %s WHERE id = %s
+        ''', (new_category, expense_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка при обновлении категории: {e}")
+        return False
+    finally:
+        conn.close()
+
+def get_recent_expenses(limit=10):
+    """Получить последние расходы для исправления"""
+    conn = get_db_connection()
+    if not conn:
+        return []
+    try:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT id, amount, description, category, transaction_date
+            FROM expenses 
+            ORDER BY transaction_date DESC 
+            LIMIT %s
+        ''', (limit,))
+        return cursor.fetchall()
+    except Exception as e:
+        logger.error(f"Ошибка при получении расходов: {e}")
+        return []
+    finally:
+        conn.close()
+
+def get_all_expenses_for_training():
+    """Получить все расходы для обучения модели"""
+    conn = get_db_connection()
+    if not conn:
+        return []
+    try:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT description, category FROM expenses
+        ''')
+        return cursor.fetchall()
+    except Exception as e:
+        logger.error(f"Ошибка при получении данных для обучения: {e}")
+        return []
+    finally:
+        conn.close()
+
 # --- UI (User Interface) ---
 def get_main_menu_keyboard():
     keyboard = [
-        [KeyboardButton("💸 Добавить расход"), KeyboardButton("📊 Отчеты")]
+        [KeyboardButton("💸 Добавить расход"), KeyboardButton("📊 Отчеты")],
+        [KeyboardButton("🔧 Исправить категории"), KeyboardButton("📚 Обучить модель")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -298,6 +388,18 @@ def get_report_period_keyboard():
         [KeyboardButton("Сегодня"), KeyboardButton("Неделя")],
         [KeyboardButton("Месяц"), KeyboardButton("Год")]
     ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+
+def get_categories_keyboard():
+    """Клавиатура с категориями для исправления"""
+    categories = list(CATEGORIES.keys())
+    # Разбиваем на ряды по 2 кнопки
+    keyboard = []
+    for i in range(0, len(categories), 2):
+        row = [KeyboardButton(categories[i])]
+        if i + 1 < len(categories):
+            row.append(KeyboardButton(categories[i + 1]))
+        keyboard.append(row)
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
 
 # --- Команды бота ---
@@ -314,6 +416,170 @@ async def report_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         reply_markup=get_report_period_keyboard()
     )
     return PERIOD_CHOICE_STATE  # Важно! Переводим в состояние выбора периода
+
+async def correction_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Меню исправления категорий"""
+    expenses = get_recent_expenses(10)
+    if not expenses:
+        await update.message.reply_text(
+            "Нет расходов для исправления. Сначала добавьте несколько расходов.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+    
+    # Формируем список расходов для выбора
+    expenses_text = "Выберите расход для исправления категории:\n\n"
+    for i, (exp_id, amount, desc, cat, date) in enumerate(expenses, 1):
+        date_str = date.strftime("%d.%m.%Y") if date else "Неизвестно"
+        expenses_text += f"{i}. {desc} - {amount} Тг ({cat}) - {date_str}\n"
+    
+    # Сохраняем расходы в контексте
+    context.user_data['expenses_to_correct'] = expenses
+    
+    await update.message.reply_text(
+        expenses_text + "\nВведите номер расхода (1-10):",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return EXPENSE_CHOICE_STATE
+
+async def expense_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Выбор расхода для исправления"""
+    try:
+        choice = int(update.message.text)
+        expenses = context.user_data.get('expenses_to_correct', [])
+        
+        if choice < 1 or choice > len(expenses):
+            await update.message.reply_text(
+                f"Пожалуйста, введите число от 1 до {len(expenses)}",
+                reply_markup=get_main_menu_keyboard()
+            )
+            return ConversationHandler.END
+        
+        # Сохраняем выбранный расход
+        selected_expense = expenses[choice - 1]
+        context.user_data['selected_expense'] = selected_expense
+        
+        exp_id, amount, desc, cat, date = selected_expense
+        date_str = date.strftime("%d.%m.%Y") if date else "Неизвестно"
+        
+        await update.message.reply_text(
+            f"Выбран расход:\n"
+            f"📝 {desc}\n"
+            f"💰 {amount} Тг\n"
+            f"🏷️ Текущая категория: {cat}\n"
+            f"📅 {date_str}\n\n"
+            f"Выберите новую категорию:",
+            reply_markup=get_categories_keyboard()
+        )
+        return CATEGORY_CHOICE_STATE
+        
+    except ValueError:
+        await update.message.reply_text(
+            "Пожалуйста, введите число.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+
+async def category_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Выбор новой категории для расхода"""
+    new_category = update.message.text
+    
+    if new_category not in CATEGORIES:
+        await update.message.reply_text(
+            "Пожалуйста, выберите категорию из предложенных.",
+            reply_markup=get_categories_keyboard()
+        )
+        return CATEGORY_CHOICE_STATE
+    
+    selected_expense = context.user_data.get('selected_expense')
+    if not selected_expense:
+        await update.message.reply_text(
+            "Ошибка: расход не найден. Попробуйте снова.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+    
+    exp_id, amount, desc, old_cat, date = selected_expense
+    
+    # Обновляем категорию в базе данных
+    if update_expense_category(exp_id, new_category):
+        await update.message.reply_text(
+            f"✅ Категория успешно изменена!\n"
+            f"📝 {desc}\n"
+            f"🏷️ {old_cat} → {new_category}\n\n"
+            f"Теперь модель будет использовать это исправление для будущих классификаций.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        
+        # Автоматически переобучаем модель на исправленных данных
+        await retrain_model_on_corrected_data(update, context)
+    else:
+        await update.message.reply_text(
+            "❌ Ошибка при обновлении категории. Попробуйте снова.",
+            reply_markup=get_main_menu_keyboard()
+        )
+    
+    return ConversationHandler.END
+
+async def retrain_model_on_corrected_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Переобучение модели на исправленных данных"""
+    try:
+        # Получаем все расходы из базы данных
+        training_data = get_all_expenses_for_training()
+        
+        if training_data:
+            # Обучаем модель на исправленных данных
+            train_model(training_data)
+            
+            # Также добавляем исправленные данные в словарь категорий
+            for description, category in training_data:
+                if category in CATEGORIES and description.lower() not in [w.lower() for w in CATEGORIES[category]]:
+                    CATEGORIES[category].append(description.lower())
+            
+            await update.message.reply_text(
+                "🤖 Модель успешно переобучена на исправленных данных!\n"
+                "Теперь похожие товары будут автоматически классифицироваться правильно."
+            )
+        else:
+            await update.message.reply_text(
+                "⚠️ Нет данных для обучения модели."
+            )
+    except Exception as e:
+        logger.error(f"Ошибка при переобучении модели: {e}")
+        await update.message.reply_text(
+            f"⚠️ Ошибка при переобучении модели: {e}"
+        )
+
+async def manual_training(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Ручное обучение модели на всех данных из БД"""
+    try:
+        training_data = get_all_expenses_for_training()
+        
+        if training_data:
+            # Обучаем модель
+            train_model(training_data)
+            
+            # Обновляем словарь категорий
+            for description, category in training_data:
+                if category in CATEGORIES and description.lower() not in [w.lower() for w in CATEGORIES[category]]:
+                    CATEGORIES[category].append(description.lower())
+            
+            await update.message.reply_text(
+                f"🤖 Модель успешно обучена на {len(training_data)} записях!\n"
+                "Теперь классификация будет более точной.",
+                reply_markup=get_main_menu_keyboard()
+            )
+        else:
+            await update.message.reply_text(
+                "⚠️ Нет данных для обучения модели. Сначала добавьте несколько расходов.",
+                reply_markup=get_main_menu_keyboard()
+            )
+    except Exception as e:
+        logger.error(f"Ошибка при обучении модели: {e}")
+        await update.message.reply_text(
+            f"❌ Ошибка при обучении модели: {e}",
+            reply_markup=get_main_menu_keyboard()
+        )
 
 async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     period_text = update.message.text.lower()
@@ -412,7 +678,15 @@ def parse_date_period(text):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = update.message.text.strip()
-    if text in ["💸 Добавить расход", "📊 Отчеты", "Сегодня", "Неделя", "Месяц", "Год"]:
+    
+    # Проверяем специальные команды
+    if text == "🔧 Исправить категории":
+        await correction_menu(update, context)
+        return
+    elif text == "📚 Обучить модель":
+        await manual_training(update, context)
+        return
+    elif text in ["💸 Добавить расход", "📊 Отчеты", "Сегодня", "Неделя", "Месяц", "Год"]:
         return
 
     logger.info(f"Получено сообщение: {text}")
@@ -434,7 +708,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         transaction_date = datetime.now(timezone.utc)
         if add_expense(amount, category, description, transaction_date): 
             await update.message.reply_text(
-                f"✅ Расход '{description}' ({amount:.2f}) записан в категорию '{category}'!",
+                f"✅ Расход '{description}' ({amount:.2f}) записан в категорию '{category}'!\n\n"
+                f"💡 Если категория неправильная, используйте '🔧 Исправить категории' для исправления.",
                 reply_markup=get_main_menu_keyboard()
             )
         else:
@@ -453,12 +728,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 # --- Главная функция запуска бота ---
 PERIOD_CHOICE_STATE = 1
+EXPENSE_CHOICE_STATE = 2
+CATEGORY_CHOICE_STATE = 3
 
 def main():
     train_model(TRAINING_DATA)
     init_db()
     application = Application.builder().token(BOT_TOKEN).build()
 
+    # Обработчик для отчетов
     report_conv_handler = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex("^📊 Отчеты$"), report_menu),
@@ -470,9 +748,26 @@ def main():
         fallbacks=[MessageHandler(filters.TEXT & ~filters.COMMAND, start)],
         allow_reentry=True
     )
+    
+    # Обработчик для исправления категорий
+    correction_conv_handler = ConversationHandler(
+        entry_points=[
+            MessageHandler(filters.Regex("^🔧 Исправить категории$"), correction_menu),
+            CommandHandler("correct", correction_menu)
+        ],
+        states={
+            EXPENSE_CHOICE_STATE: [MessageHandler(filters.Regex("^[0-9]+$"), expense_choice)],
+            CATEGORY_CHOICE_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, category_choice)],
+        },
+        fallbacks=[MessageHandler(filters.TEXT & ~filters.COMMAND, start)],
+        allow_reentry=True
+    )
+    
     application.add_handler(report_conv_handler)
+    application.add_handler(correction_conv_handler)
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    
     logger.info("Бот запущен!")
     application.run_polling()
 
