@@ -1430,7 +1430,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await reminder_menu(update, context)
         return
     elif text == "📅 Планирование":
-        await planning_start(update, context)
+        await planning_menu(update, context)
         return
     elif text in ["💸 Добавить расход", "📊 Отчеты", "Сегодня", "Неделя", "Месяц", "Год"]:
         return
@@ -1486,6 +1486,7 @@ REMINDER_END_DATE_STATE = 10
 REMINDER_MANAGE_STATE = 11
 
 # --- Доп. состояния для планирования бюджета ---
+PLAN_MENU_STATE = 19
 PLAN_MONTH_STATE = 20
 PLAN_TOTAL_STATE = 21
 PLAN_CATEGORY_STATE = 22
@@ -1548,10 +1549,13 @@ def main():
     # Обработчик для планирования бюджета
     planning_conv_handler = ConversationHandler(
         entry_points=[
-            MessageHandler(filters.Regex("^📅 Планирование$"), planning_start),
-            CommandHandler("planning", planning_start)
+            MessageHandler(filters.Regex("^📅 Планирование$"), planning_menu),
+            CommandHandler("planning", planning_menu)
         ],
         states={
+            PLAN_MENU_STATE: [
+                MessageHandler(filters.Regex("^(➕ Добавить планирование|📋 Список планов|🔙 Назад)$"), planning_menu),
+            ],
             PLAN_MONTH_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_month)],
             PLAN_TOTAL_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_total)],
             PLAN_CATEGORY_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_category)],
@@ -1785,6 +1789,49 @@ async def planning_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 	await update.message.reply_text("\n".join(summary_lines), reply_markup=get_main_menu_keyboard())
 	context.user_data.clear()
 	return ConversationHandler.END
+
+# --- Меню планирования ---
+async def planning_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text
+    if text == "📅 Планирование":
+        await update.message.reply_text(
+            "Выберите действие:",
+            reply_markup=ReplyKeyboardMarkup([["➕ Добавить планирование", "📋 Список планов"], ["🔙 Назад"]], resize_keyboard=True)
+        )
+        return PLAN_MENU_STATE
+    elif text == "➕ Добавить планирование":
+        return await planning_start(update, context)
+    elif text == "📋 Список планов":
+        # Покажем краткий список месяцев с суммами
+        today = datetime.now().date().replace(day=1)
+        conn = get_db_connection()
+        if not conn:
+            await update.message.reply_text("Не удалось подключиться к БД.", reply_markup=get_main_menu_keyboard())
+            return ConversationHandler.END
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT plan_month, total_amount, id FROM budget_plans ORDER BY plan_month DESC LIMIT 12')
+            rows = cursor.fetchall()
+        finally:
+            conn.close()
+        if not rows:
+            await update.message.reply_text("Планы пока отсутствуют.", reply_markup=get_main_menu_keyboard())
+            return ConversationHandler.END
+        text_lines = ["📋 Последние планы:"]
+        kb = []
+        for i, (pm, total, pid) in enumerate(rows, 1):
+            label = f"{pm.strftime('%m.%Y')} — {float(total):.0f}"
+            text_lines.append(f"{i}. {label}")
+            kb.append([KeyboardButton(label)])
+        kb.append([KeyboardButton("🔙 Назад")])
+        await update.message.reply_text("\n".join(text_lines), reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
+        return PLAN_MENU_STATE
+    elif text == "🔙 Назад":
+        await update.message.reply_text("Возвращаюсь в главное меню", reply_markup=get_main_menu_keyboard())
+        return ConversationHandler.END
+    else:
+        # Нажатие на конкретный месяц из списка — просто повторно вызвать меню
+        return PLAN_MENU_STATE
 
 if __name__ == "__main__":
     main()
