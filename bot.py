@@ -1507,7 +1507,7 @@ def main():
         states={
             PERIOD_CHOICE_STATE: [MessageHandler(filters.Regex("^(Сегодня|Неделя|Месяц|Год)$"), period_choice)],
         },
-        fallbacks=[MessageHandler(filters.TEXT & ~filters.COMMAND, start)],
+        fallbacks=[MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)],
         allow_reentry=True
     )
     
@@ -1522,7 +1522,7 @@ def main():
             CATEGORY_CHOICE_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, category_choice)],
             AMOUNT_EDIT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, amount_edit)],
         },
-        fallbacks=[MessageHandler(filters.TEXT & ~filters.COMMAND, start)],
+        fallbacks=[MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)],
         allow_reentry=True
     )
 
@@ -1541,7 +1541,7 @@ def main():
             REMINDER_END_DATE_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_end_date_input)],
             REMINDER_MANAGE_STATE: [MessageHandler(filters.Regex("^(❌ Удалить \d+|🔙 Назад)$"), reminder_manage)],
         },
-        fallbacks=[MessageHandler(filters.TEXT & ~filters.COMMAND, start)],
+        fallbacks=[MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)],
         allow_reentry=True
     )
     
@@ -1560,7 +1560,7 @@ def main():
         },
         fallbacks=[
             MessageHandler(filters.Regex("^📚 Обучить модель$"), manual_training_fallback),
-            MessageHandler(filters.TEXT & ~filters.COMMAND, start)
+            MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
         ],
         allow_reentry=True
     )
