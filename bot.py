@@ -2,7 +2,7 @@ import os
 import logging
 import psycopg2
 from psycopg2 import sql
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, date
 from dotenv import load_dotenv
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, MessageHandler, ConversationHandler, ContextTypes, filters
@@ -216,11 +216,11 @@ def train_model(data):
     try:
         descriptions = [normalize(item[0]) for item in use_data]
         categories = [item[1] for item in use_data]
-        
+
         # Обучаем модель
         X = vectorizer.fit_transform(descriptions)
         classifier.fit(X, categories)
-        
+
         # Обновляем словарь категорий новыми примерами
         for description, category in use_data:
             if category in CATEGORIES:
@@ -228,7 +228,7 @@ def train_model(data):
                 if desc_lower and desc_lower not in [w.lower() for w in CATEGORIES[category]]:
                     CATEGORIES[category].append(desc_lower)
                     logger.info(f"Добавлено в категорию '{category}': {desc_lower}")
-        
+
         logger.info(f"Модель классификации (гибрид) успешно обучена на {len(use_data)} записях.")
     except Exception as e:
         logger.error(f"Ошибка при обучении модели: {e}")
@@ -249,12 +249,12 @@ def classify_expense(description: str) -> str:
         cat = dict_match_category(text_norm)
         if cat:
             return cat
-
+        
         # 2) фуззи
         cat = fuzzy_category(text_norm)
         if cat:
             return cat
-
+        
         # 3) ML
         if hasattr(classifier, "classes_") and len(getattr(classifier, "classes_", [])) > 0:
             vec = vectorizer.transform([text_norm])
@@ -315,6 +315,26 @@ def init_db():
                 reminder_10_days BOOLEAN DEFAULT FALSE,
                 reminder_3_days BOOLEAN DEFAULT FALSE,
                 is_active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            );
+        ''')
+        
+        # Создаем таблицы для планирования бюджета
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS budget_plans (
+                id SERIAL PRIMARY KEY,
+                plan_month DATE NOT NULL UNIQUE,
+                total_amount NUMERIC(12,2) NOT NULL,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            );
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS budget_plan_items (
+                id SERIAL PRIMARY KEY,
+                plan_id INTEGER NOT NULL REFERENCES budget_plans(id) ON DELETE CASCADE,
+                category VARCHAR(100) NOT NULL,
+                amount NUMERIC(12,2) NOT NULL,
+                comment TEXT,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             );
         ''')
@@ -606,7 +626,7 @@ def get_main_menu_keyboard():
     keyboard = [
         [KeyboardButton("💸 Добавить расход"), KeyboardButton("📊 Отчеты")],
         [KeyboardButton("🔧 Исправить категории"), KeyboardButton("📚 Обучить модель")],
-        [KeyboardButton("⏰ Напоминания")]
+        [KeyboardButton("⏰ Напоминания"), KeyboardButton("📅 Планирование")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -628,6 +648,22 @@ def get_categories_keyboard():
             row.append(KeyboardButton(categories[i + 1]))
         keyboard.append(row)
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+
+def get_categories_keyboard_with_done():
+    """Клавиатура с категориями + кнопка Готово (для планирования)"""
+    categories = list(CATEGORIES.keys())
+    keyboard = []
+    for i in range(0, len(categories), 2):
+        row = [KeyboardButton(categories[i])]
+        if i + 1 < len(categories):
+            row.append(KeyboardButton(categories[i + 1]))
+        keyboard.append(row)
+    keyboard.append([KeyboardButton("Готово")])
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+async def manual_training_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await manual_training(update, context)
+    return ConversationHandler.END
 
 # --- Команды бота ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1393,6 +1429,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     elif text == "⏰ Напоминания":
         await reminder_menu(update, context)
         return
+    elif text == "📅 Планирование":
+        await planning_start(update, context)
+        return
     elif text in ["💸 Добавить расход", "📊 Отчеты", "Сегодня", "Неделя", "Месяц", "Год"]:
         return
 
@@ -1446,6 +1485,14 @@ REMINDER_START_DATE_STATE = 9
 REMINDER_END_DATE_STATE = 10
 REMINDER_MANAGE_STATE = 11
 
+# --- Доп. состояния для планирования бюджета ---
+PLAN_MONTH_STATE = 20
+PLAN_TOTAL_STATE = 21
+PLAN_CATEGORY_STATE = 22
+PLAN_AMOUNT_STATE = 23
+PLAN_COMMENT_STATE = 24
+PLAN_SUMMARY_STATE = 25
+
 def main():
     train_model(TRAINING_DATA)
     init_db()
@@ -1498,9 +1545,30 @@ def main():
         allow_reentry=True
     )
     
+    # Обработчик для планирования бюджета
+    planning_conv_handler = ConversationHandler(
+        entry_points=[
+            MessageHandler(filters.Regex("^📅 Планирование$"), planning_start),
+            CommandHandler("planning", planning_start)
+        ],
+        states={
+            PLAN_MONTH_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_month)],
+            PLAN_TOTAL_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_total)],
+            PLAN_CATEGORY_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_category)],
+            PLAN_AMOUNT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_amount)],
+            PLAN_COMMENT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_comment)],
+        },
+        fallbacks=[
+            MessageHandler(filters.Regex("^📚 Обучить модель$"), manual_training_fallback),
+            MessageHandler(filters.TEXT & ~filters.COMMAND, start)
+        ],
+        allow_reentry=True
+    )
+
     application.add_handler(report_conv_handler)
     application.add_handler(correction_conv_handler)
     application.add_handler(reminder_conv_handler)
+    application.add_handler(planning_conv_handler)
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
@@ -1553,5 +1621,170 @@ def main():
         schedule.run_pending()
         time.sleep(1)
 
+# --- Функции планирования бюджета ---
+def upsert_budget_plan(plan_month: date, total_amount: float) -> int | None:
+	conn = get_db_connection()
+	if not conn:
+		return None
+	try:
+		cursor = conn.cursor()
+		cursor.execute('''
+			INSERT INTO budget_plans (plan_month, total_amount)
+			VALUES (%s, %s)
+			ON CONFLICT (plan_month)
+			DO UPDATE SET total_amount = EXCLUDED.total_amount
+			RETURNING id
+		''', (plan_month, total_amount))
+		plan_id = cursor.fetchone()[0]
+		conn.commit()
+		return plan_id
+	except Exception as e:
+		logger.error(f"Ошибка при сохранении бюджета: {e}")
+		return None
+	finally:
+		conn.close()
+
+
+def add_budget_item(plan_id: int, category: str, amount: float, comment: str | None) -> bool:
+	conn = get_db_connection()
+	if not conn:
+		return False
+	try:
+		cursor = conn.cursor()
+		cursor.execute('''
+			INSERT INTO budget_plan_items (plan_id, category, amount, comment)
+			VALUES (%s, %s, %s, %s)
+		''', (plan_id, category, amount, comment))
+		conn.commit()
+		return True
+	except Exception as e:
+		logger.error(f"Ошибка при добавлении статьи бюджета: {e}")
+		return False
+	finally:
+		conn.close()
+
+
+def get_budget_plan(plan_month: date):
+	conn = get_db_connection()
+	if not conn:
+		return None, []
+	try:
+		cursor = conn.cursor()
+		cursor.execute('SELECT id, total_amount FROM budget_plans WHERE plan_month = %s', (plan_month,))
+		row = cursor.fetchone()
+		plan = None
+		if row:
+			plan = { 'id': row[0], 'total_amount': float(row[1]) }
+			cursor.execute('SELECT category, amount, comment FROM budget_plan_items WHERE plan_id = %s ORDER BY id', (row[0],))
+			items = cursor.fetchall()
+		else:
+			items = []
+		return plan, items
+	except Exception as e:
+		logger.error(f"Ошибка при получении бюджета: {e}")
+		return None, []
+	finally:
+		conn.close()
+
+# --- Диалог планирования бюджета ---
+async def planning_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+	await update.message.reply_text(
+		"Выберите месяц планирования (введите в формате ММ.ГГГГ), например 08.2025:",
+		reply_markup=ReplyKeyboardRemove()
+	)
+	return PLAN_MONTH_STATE
+
+async def planning_month(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+	text = update.message.text.strip()
+	try:
+		plan_month = datetime.strptime(f"01.{text}", "%d.%m.%Y").date()
+		context.user_data['plan_month'] = plan_month
+		await update.message.reply_text("Введите общий бюджет на месяц (например 300000):")
+		return PLAN_TOTAL_STATE
+	except ValueError:
+		await update.message.reply_text("Неверный формат. Введите месяц в виде ММ.ГГГГ")
+		return PLAN_MONTH_STATE
+
+async def planning_total(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+	try:
+		total = float(update.message.text.replace(',', '.'))
+		if total <= 0:
+			raise ValueError
+		context.user_data['plan_total'] = total
+		await update.message.reply_text(
+			"Теперь выберите категорию из списка и введите сумму. После каждого добавления можно продолжить.\n"
+			"Когда закончите — отправьте 'Готово'.",
+			reply_markup=get_categories_keyboard_with_done()
+		)
+		return PLAN_CATEGORY_STATE
+	except ValueError:
+		await update.message.reply_text("Введите положительное число для общего бюджета:")
+		return PLAN_TOTAL_STATE
+
+async def planning_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+	category = update.message.text.strip()
+	if category == 'Готово':
+		return await planning_summary(update, context)
+	if category not in CATEGORIES:
+		await update.message.reply_text("Выберите категорию с клавиатуры или отправьте 'Готово' для завершения.")
+		return PLAN_CATEGORY_STATE
+	context.user_data['current_category'] = category
+	await update.message.reply_text(f"Сколько заложить на категорию '{category}'?")
+	return PLAN_AMOUNT_STATE
+
+async def planning_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+	try:
+		amount = float(update.message.text.replace(',', '.'))
+		if amount < 0:
+			raise ValueError
+		context.user_data['current_amount'] = amount
+		await update.message.reply_text("Добавьте комментарий к этой категории (или '-' если без комментария):")
+		return PLAN_COMMENT_STATE
+	except ValueError:
+		await update.message.reply_text("Введите корректную сумму:")
+		return PLAN_AMOUNT_STATE
+
+async def planning_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+	comment = update.message.text.strip()
+	if comment == '-':
+		comment = None
+	items = context.user_data.get('items', [])
+	items.append({
+		'category': context.user_data['current_category'],
+		'amount': context.user_data['current_amount'],
+		'comment': comment
+	})
+	context.user_data['items'] = items
+	await update.message.reply_text(
+		"Добавлено. Можете выбрать следующую категорию или отправить 'Готово'.",
+		reply_markup=get_categories_keyboard_with_done()
+	)
+	return PLAN_CATEGORY_STATE
+
+async def planning_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+	plan_month = context.user_data['plan_month']
+	plan_total = context.user_data['plan_total']
+	items = context.user_data.get('items', [])
+	allocated = sum(i['amount'] for i in items)
+	leftover = plan_total - allocated
+	
+	# Сохраняем в БД
+	plan_id = upsert_budget_plan(plan_month, plan_total)
+	if plan_id:
+		for i in items:
+			add_budget_item(plan_id, i['category'], i['amount'], i['comment'])
+	
+	summary_lines = [f"📅 Месяц: {plan_month.strftime('%m.%Y')}", f"💰 Общий бюджет: {plan_total:.2f}", "", "📦 Распределение:"]
+	for i in items:
+		comment = f" — {i['comment']}" if i['comment'] else ""
+		summary_lines.append(f"- {i['category']}: {i['amount']:.2f}{comment}")
+	summary_lines.append("")
+	summary_lines.append(f"🧮 Сумма по категориям: {allocated:.2f}")
+	summary_lines.append(f"✅ Остаток бюджета: {leftover:.2f}")
+	
+	await update.message.reply_text("\n".join(summary_lines), reply_markup=get_main_menu_keyboard())
+	context.user_data.clear()
+	return ConversationHandler.END
+
 if __name__ == "__main__":
-    main() 
+    main()
