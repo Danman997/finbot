@@ -1338,15 +1338,15 @@ def create_today_report(df, grouped_by_category, categories, amounts, total):
     return fig
 
 def create_week_report(df, grouped_by_category, categories, amounts, total):
-    """Создание отчета за неделю - пирог и топ 5 категорий"""
-    fig = plt.figure(figsize=(16, 8))
+    """Создание отчета за неделю - только пирог категорий"""
+    fig = plt.figure(figsize=(12, 8))
     fig.patch.set_facecolor('#1a1a1a')
     
     # Цветовая палитра
     colors = ['#6B8E23', '#4682B4', '#CD853F', '#20B2AA', '#8A2BE2', '#32CD32', '#FF8C00', '#DC143C', '#1E90FF', '#9370DB']
     
-    # 1. Пирог категорий (левая часть)
-    ax1 = fig.add_subplot(1, 2, 1)
+    # Пирог категорий (полная ширина)
+    ax1 = fig.add_subplot(1, 1, 1)
     wedges, texts, autotexts = ax1.pie(amounts, labels=None, autopct='%1.1f%%', 
                                        startangle=90, colors=colors[:len(amounts)],
                                        shadow=True, explode=[0.05] * len(amounts))
@@ -1363,42 +1363,25 @@ def create_week_report(df, grouped_by_category, categories, amounts, total):
     
     ax1.set_title('РАСХОДЫ ПО КАТЕГОРИЯМ', color='white', fontsize=18, fontweight='bold', pad=20)
     
-    # 2. Топ 5 категорий (правая часть)
-    ax2 = fig.add_subplot(1, 2, 2)
-    top_categories = categories[:5]
-    top_amounts = amounts[:5]
-    
-    bars = ax2.barh(top_categories, top_amounts, color=colors[:5], alpha=0.8)
-    ax2.set_title('ТОП-5 КАТЕГОРИЙ', color='white', fontsize=18, fontweight='bold', pad=20)
-    ax2.set_xlabel('Сумма (Тг)', color='white', fontsize=14)
-    ax2.tick_params(colors='white')
-    ax2.grid(True, alpha=0.2, linestyle='--', linewidth=0.5)
-    
-    # Добавляем значения на столбцы
-    for bar, amount in zip(bars, top_amounts):
-        width = bar.get_width()
-        ax2.text(width + max(top_amounts)*0.01, bar.get_y() + bar.get_height()/2.,
-                 f'{amount:.0f}', ha='left', va='center', color='white', fontweight='bold', fontsize=12)
-    
     # Легенда для пирога
     legend_labels = [f"{cat} — {amt:.0f} Тг" for cat, amt in zip(categories, amounts)]
-    ax1.legend(wedges, legend_labels, title="Категории", loc="upper left", 
-              bbox_to_anchor=(-0.1, 1.0), fontsize=12, title_fontsize=14)
+    ax1.legend(wedges, legend_labels, title="Категории", loc="center left", 
+              bbox_to_anchor=(1.0, 0.5), fontsize=12, title_fontsize=14)
     
     fig.suptitle('ОТЧЕТ ЗА НЕДЕЛЮ', color='white', fontsize=22, fontweight='bold', y=0.95)
     
     return fig
 
 def create_month_report(df, grouped_by_category, grouped_by_week, categories, amounts, total):
-    """Создание отчета за месяц - пирог, топ 5 категорий, сравнение недель"""
-    fig = plt.figure(figsize=(18, 12))
+    """Создание отчета за месяц - пирог и сравнение недель"""
+    fig = plt.figure(figsize=(16, 8))
     fig.patch.set_facecolor('#1a1a1a')
     
     # Цветовая палитра
     colors = ['#6B8E23', '#4682B4', '#CD853F', '#20B2AA', '#8A2BE2', '#32CD32', '#FF8C00', '#DC143C', '#1E90FF', '#9370DB']
     
-    # 1. Пирог категорий (верхний левый)
-    ax1 = fig.add_subplot(2, 2, 1)
+    # 1. Пирог категорий (левая часть)
+    ax1 = fig.add_subplot(1, 2, 1)
     wedges, texts, autotexts = ax1.pie(amounts, labels=None, autopct='%1.1f%%', 
                                        startangle=90, colors=colors[:len(amounts)],
                                        shadow=True, explode=[0.05] * len(amounts))
@@ -1413,38 +1396,22 @@ def create_month_report(df, grouped_by_category, grouped_by_week, categories, am
     
     ax1.set_title('РАСХОДЫ ПО КАТЕГОРИЯМ', color='white', fontsize=16, fontweight='bold', pad=20)
     
-    # 2. Топ 5 категорий (верхний правый)
-    ax2 = fig.add_subplot(2, 2, 2)
-    top_categories = categories[:5]
-    top_amounts = amounts[:5]
-    
-    bars = ax2.barh(top_categories, top_amounts, color=colors[:5], alpha=0.8)
-    ax2.set_title('ТОП-5 КАТЕГОРИЙ', color='white', fontsize=16, fontweight='bold', pad=20)
-    ax2.set_xlabel('Сумма (Тг)', color='white', fontsize=14)
-    ax2.tick_params(colors='white')
-    ax2.grid(True, alpha=0.2, linestyle='--', linewidth=0.5)
-    
-    for bar, amount in zip(bars, top_amounts):
-        width = bar.get_width()
-        ax2.text(width + max(top_amounts)*0.01, bar.get_y() + bar.get_height()/2.,
-                 f'{amount:.0f}', ha='left', va='center', color='white', fontweight='bold', fontsize=12)
-    
-    # 3. Сравнение недель (нижний ряд)
-    ax3 = fig.add_subplot(2, 2, (3, 4))
+    # 2. Сравнение недель (правая часть)
+    ax2 = fig.add_subplot(1, 2, 2)
     weeks = grouped_by_week['Неделя'].tolist()
     week_amounts = grouped_by_week['Сумма'].tolist()
     
-    bars = ax3.bar(weeks, week_amounts, color=colors[:len(weeks)], alpha=0.8)
-    ax3.set_title('СРАВНЕНИЕ НЕДЕЛЬ', color='white', fontsize=18, fontweight='bold', pad=20)
-    ax3.set_ylabel('Сумма (Тг)', color='white', fontsize=14)
-    ax3.set_xlabel('Номер недели', color='white', fontsize=14)
-    ax3.tick_params(colors='white')
-    ax3.grid(True, alpha=0.2, linestyle='--', linewidth=0.5)
+    bars = ax2.bar(weeks, week_amounts, color=colors[:len(weeks)], alpha=0.8)
+    ax2.set_title('СРАВНЕНИЕ НЕДЕЛЬ', color='white', fontsize=16, fontweight='bold', pad=20)
+    ax2.set_ylabel('Сумма (Тг)', color='white', fontsize=14)
+    ax2.set_xlabel('Номер недели', color='white', fontsize=14)
+    ax2.tick_params(colors='white')
+    ax2.grid(True, alpha=0.2, linestyle='--', linewidth=0.5)
     
     # Добавляем значения на столбцы
     for bar, amount in zip(bars, week_amounts):
         height = bar.get_height()
-        ax3.text(bar.get_x() + bar.get_width()/2., height + max(week_amounts)*0.01,
+        ax2.text(bar.get_x() + bar.get_width()/2., height + max(week_amounts)*0.01,
                  f'{amount:.0f}', ha='center', va='bottom', color='white', fontweight='bold', fontsize=12)
     
     # Легенда для пирога
@@ -1457,15 +1424,15 @@ def create_month_report(df, grouped_by_category, grouped_by_week, categories, am
     return fig
 
 def create_year_report(df, grouped_by_category, grouped_by_month, categories, amounts, total):
-    """Создание отчета за год - пирог, топ 5 категорий, сравнение месяцев"""
-    fig = plt.figure(figsize=(18, 12))
+    """Создание отчета за год - пирог и сравнение месяцев"""
+    fig = plt.figure(figsize=(16, 8))
     fig.patch.set_facecolor('#1a1a1a')
     
     # Цветовая палитра
     colors = ['#6B8E23', '#4682B4', '#CD853F', '#20B2AA', '#8A2BE2', '#32CD32', '#FF8C00', '#DC143C', '#1E90FF', '#9370DB']
     
-    # 1. Пирог категорий (верхний левый)
-    ax1 = fig.add_subplot(2, 2, 1)
+    # 1. Пирог категорий (левая часть)
+    ax1 = fig.add_subplot(1, 2, 1)
     wedges, texts, autotexts = ax1.pie(amounts, labels=None, autopct='%1.1f%%', 
                                        startangle=90, colors=colors[:len(amounts)],
                                        shadow=True, explode=[0.05] * len(amounts))
@@ -1480,38 +1447,22 @@ def create_year_report(df, grouped_by_category, grouped_by_month, categories, am
     
     ax1.set_title('РАСХОДЫ ПО КАТЕГОРИЯМ', color='white', fontsize=16, fontweight='bold', pad=20)
     
-    # 2. Топ 5 категорий (верхний правый)
-    ax2 = fig.add_subplot(2, 2, 2)
-    top_categories = categories[:5]
-    top_amounts = amounts[:5]
-    
-    bars = ax2.barh(top_categories, top_amounts, color=colors[:5], alpha=0.8)
-    ax2.set_title('ТОП-5 КАТЕГОРИЙ', color='white', fontsize=16, fontweight='bold', pad=20)
-    ax2.set_xlabel('Сумма (Тг)', color='white', fontsize=14)
-    ax2.tick_params(colors='white')
-    ax2.grid(True, alpha=0.2, linestyle='--', linewidth=0.5)
-    
-    for bar, amount in zip(bars, top_amounts):
-        width = bar.get_width()
-        ax2.text(width + max(top_amounts)*0.01, bar.get_y() + bar.get_height()/2.,
-                 f'{amount:.0f}', ha='left', va='center', color='white', fontweight='bold', fontsize=12)
-    
-    # 3. Сравнение месяцев (нижний ряд)
-    ax3 = fig.add_subplot(2, 2, (3, 4))
+    # 2. Сравнение месяцев (правая часть)
+    ax2 = fig.add_subplot(1, 2, 2)
     months = grouped_by_month['Месяц'].tolist()
     month_amounts = grouped_by_month['Сумма'].tolist()
     
-    bars = ax3.bar(months, month_amounts, color=colors[:len(months)], alpha=0.8)
-    ax3.set_title('СРАВНЕНИЕ МЕСЯЦЕВ', color='white', fontsize=18, fontweight='bold', pad=20)
-    ax3.set_ylabel('Сумма (Тг)', color='white', fontsize=14)
-    ax3.set_xlabel('Месяц', color='white', fontsize=14)
-    ax3.tick_params(colors='white')
-    ax3.grid(True, alpha=0.2, linestyle='--', linewidth=0.5)
+    bars = ax2.bar(months, month_amounts, color=colors[:len(months)], alpha=0.8)
+    ax2.set_title('СРАВНЕНИЕ МЕСЯЦЕВ', color='white', fontsize=16, fontweight='bold', pad=20)
+    ax2.set_ylabel('Сумма (Тг)', color='white', fontsize=14)
+    ax2.set_xlabel('Месяц', color='white', fontsize=14)
+    ax2.tick_params(colors='white')
+    ax2.grid(True, alpha=0.2, linestyle='--', linewidth=0.5)
     
     # Добавляем значения на столбцы
     for bar, amount in zip(bars, month_amounts):
         height = bar.get_height()
-        ax3.text(bar.get_x() + bar.get_width()/2., height + max(month_amounts)*0.01,
+        ax2.text(bar.get_x() + bar.get_width()/2., height + max(month_amounts)*0.01,
                  f'{amount:.0f}', ha='center', va='bottom', color='white', fontweight='bold', fontsize=12)
     
     # Легенда для пирога
@@ -1562,6 +1513,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await planning_menu(update, context)
         return
     elif text in ["💸 Добавить расход", "📊 Отчеты", "Сегодня", "Неделя", "Месяц", "Год"]:
+        if text == "💸 Добавить расход":
+            await update.message.reply_text(
+                "💸 Для добавления расхода напишите в формате:\n\n"
+                "📝 Описание Сумма\n\n"
+                "Например:\n"
+                "• Обед в кафе 1500\n"
+                "• Такси домой 800\n"
+                "• Продукты 2500\n\n"
+                "Бот автоматически определит категорию и запишет расход!",
+                reply_markup=get_main_menu_keyboard()
+            )
         return
 
     logger.info(f"Получено сообщение: {text}")
