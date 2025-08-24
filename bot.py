@@ -11,6 +11,10 @@ import io
 import re
 import schedule
 import time
+import pandas as pd
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils.dataframe import dataframe_to_rows
 
 # Настройки matplotlib для высокого качества
 plt.rcParams['figure.dpi'] = 300
@@ -1817,7 +1821,7 @@ def parse_month_year(month_text):
     raise ValueError("Неверный формат месяца")
 
 async def generate_simple_comparison(update: Update, context: ContextTypes.DEFAULT_TYPE, month: int, year: int):
-    """Простое сравнение планов и расходов по категориям"""
+    """Простое сравнение планов и расходов по категориям с графиком и Excel файлом"""
     try:
         # Получаем план бюджета
         plan_data = get_budget_plan_by_month(month, year)
@@ -1874,6 +1878,12 @@ async def generate_simple_comparison(update: Update, context: ContextTypes.DEFAU
             else:
                 report += f"   ✅ В рамках плана\n"
         
+        # Создаем круговой график
+        await create_analytics_chart(update, context, month, year, plan_dict, expense_dict, all_categories)
+        
+        # Создаем Excel файл
+        await create_analytics_excel(update, context, month, year, plan_dict, expense_dict, all_categories, total_budget, total_planned, total_spent)
+        
         # Отправляем отчет
         await update.message.reply_text(
             report,
@@ -1883,6 +1893,271 @@ async def generate_simple_comparison(update: Update, context: ContextTypes.DEFAU
     except Exception as e:
         await update.message.reply_text(
             f"❌ Ошибка при генерации отчета: {str(e)}",
+            reply_markup=get_main_menu_keyboard()
+        )
+
+async def create_analytics_chart(update: Update, context: ContextTypes.DEFAULT_TYPE, month: int, year: int, plan_dict: dict, expense_dict: dict, all_categories: set):
+    """Создание кругового графика для аналитики"""
+    try:
+        # Создаем фигуру с двумя подграфиками
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
+        
+        # Подготовка данных для планов
+        plan_labels = []
+        plan_sizes = []
+        plan_colors = []
+        
+        for category in sorted(all_categories):
+            if category in plan_dict and plan_dict[category] > 0:
+                plan_labels.append(category)
+                plan_sizes.append(plan_dict[category])
+                plan_colors.append(plt.cm.Set3(len(plan_labels) % 12))
+        
+        # Подготовка данных для расходов
+        expense_labels = []
+        expense_sizes = []
+        expense_colors = []
+        
+        for category in sorted(all_categories):
+            if category in expense_dict and expense_dict[category] > 0:
+                expense_labels.append(category)
+                expense_sizes.append(expense_dict[category])
+                expense_colors.append(plt.cm.Set3(len(expense_labels) % 12))
+        
+        # График планов
+        if plan_sizes:
+            wedges1, texts1, autotexts1 = ax1.pie(plan_sizes, labels=plan_labels, autopct='%1.1f%%', 
+                                                   colors=plan_colors, startangle=90, shadow=True, explode=[0.05] * len(plan_sizes))
+            ax1.set_title(f'📋 Планы на {get_month_name(month)} {year}', fontsize=16, fontweight='bold', pad=20)
+            
+            # Настройка текста
+            for autotext in autotexts1:
+                autotext.set_color('white')
+                autotext.set_fontweight('bold')
+                autotext.set_fontsize(10)
+        
+        # График расходов
+        if expense_sizes:
+            wedges2, texts2, autotexts2 = ax2.pie(expense_sizes, labels=expense_labels, autopct='%1.1f%%', 
+                                                  colors=expense_colors, startangle=90, shadow=True, explode=[0.05] * len(expense_sizes))
+            ax2.set_title(f'💸 Фактические расходы за {get_month_name(month)} {year}', fontsize=16, fontweight='bold', pad=20)
+            
+            # Настройка текста
+            for autotext in autotexts2:
+                autotext.set_color('white')
+                autotext.set_fontweight('bold')
+                autotext.set_fontsize(10)
+        
+        plt.tight_layout()
+        
+        # Сохраняем график в байты
+        img_buffer = io.BytesIO()
+        plt.savefig(img_buffer, format='png', dpi=300, bbox_inches='tight', facecolor='white')
+        img_buffer.seek(0)
+        plt.close()
+        
+        # Отправляем график
+        await update.message.reply_photo(
+            photo=img_buffer,
+            caption=f"📊 График сравнения планов и расходов за {get_month_name(month)} {year}",
+            reply_markup=get_main_menu_keyboard()
+        )
+        
+    except Exception as e:
+        logger.error(f"Ошибка при создании графика аналитики: {e}")
+        await update.message.reply_text(
+            f"❌ Ошибка при создании графика: {str(e)}",
+            reply_markup=get_main_menu_keyboard()
+        )
+
+async def create_analytics_excel(update: Update, context: ContextTypes.DEFAULT_TYPE, month: int, year: int, plan_dict: dict, expense_dict: dict, all_categories: set, total_budget: float, total_planned: float, total_spent: float):
+    """Создание Excel файла с сравнительной таблицей"""
+    try:
+        # Создаем новую книгу Excel
+        wb = Workbook()
+        ws = wb.active
+        ws.title = f"Аналитика {get_month_name(month)} {year}"
+        
+        # Стили для заголовков
+        header_font = Font(bold=True, size=14, color="FFFFFF")
+        header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+        header_alignment = Alignment(horizontal="center", vertical="center")
+        
+        # Стили для подзаголовков
+        subheader_font = Font(bold=True, size=12, color="FFFFFF")
+        subheader_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+        subheader_alignment = Alignment(horizontal="center", vertical="center")
+        
+        # Стили для данных
+        data_font = Font(size=11)
+        data_alignment = Alignment(horizontal="center", vertical="center")
+        
+        # Границы
+        thin_border = Border(
+            left=Side(style='thin'),
+            right=Side(style='thin'),
+            top=Side(style='thin'),
+            bottom=Side(style='thin')
+        )
+        
+        # Заголовок
+        ws.merge_cells('A1:F1')
+        ws['A1'] = f"Аналитика бюджета за {get_month_name(month)} {year}"
+        ws['A1'].font = Font(bold=True, size=16, color="FFFFFF")
+        ws['A1'].fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+        ws['A1'].alignment = Alignment(horizontal="center", vertical="center")
+        
+        # Общая информация
+        ws.merge_cells('A3:C3')
+        ws['A3'] = "Общий бюджет"
+        ws['A3'].font = subheader_font
+        ws['A3'].fill = subheader_fill
+        ws['A3'].alignment = subheader_alignment
+        ws['A3'].border = thin_border
+        
+        ws.merge_cells('D3:F3')
+        ws['D3'] = f"{total_budget:,.0f} ₸"
+        ws['D3'].font = data_font
+        ws['D3'].alignment = data_alignment
+        ws['D3'].border = thin_border
+        
+        ws.merge_cells('A4:C4')
+        ws['A4'] = "Планируемые расходы"
+        ws['A4'].font = subheader_font
+        ws['A4'].fill = subheader_fill
+        ws['A4'].alignment = subheader_alignment
+        ws['A4'].border = thin_border
+        
+        ws.merge_cells('D4:F4')
+        ws['D4'] = f"{total_planned:,.0f} ₸"
+        ws['D4'].font = data_font
+        ws['D4'].alignment = data_alignment
+        ws['D4'].border = thin_border
+        
+        ws.merge_cells('A5:C5')
+        ws['A5'] = "Фактические расходы"
+        ws['A5'].font = subheader_font
+        ws['A5'].fill = subheader_fill
+        ws['A5'].alignment = subheader_alignment
+        ws['A5'].border = thin_border
+        
+        ws.merge_cells('D5:F5')
+        ws['D5'] = f"{total_spent:,.0f} ₸"
+        ws['D5'].font = data_font
+        ws['D5'].alignment = data_alignment
+        ws['D5'].border = thin_border
+        
+        # Разница
+        difference = total_spent - total_planned
+        ws.merge_cells('A6:C6')
+        if difference > 0:
+            ws['A6'] = "Превышение бюджета"
+            ws['A6'].font = Font(bold=True, size=12, color="FFFFFF")
+            ws['A6'].fill = PatternFill(start_color="C00000", end_color="C00000", fill_type="solid")
+        else:
+            ws['A6'] = "Экономия бюджета"
+            ws['A6'].font = Font(bold=True, size=12, color="FFFFFF")
+            ws['A6'].fill = PatternFill(start_color="00B050", end_color="00B050", fill_type="solid")
+        ws['A6'].alignment = subheader_alignment
+        ws['A6'].border = thin_border
+        
+        ws.merge_cells('D6:F6')
+        ws['D6'] = f"{abs(difference):,.0f} ₸"
+        ws['D6'].font = data_font
+        ws['D6'].alignment = data_alignment
+        ws['D6'].border = thin_border
+        
+        # Заголовки таблицы
+        headers = ["Категория", "План (₸)", "Факт (₸)", "Разница (₸)", "Статус", "Процент выполнения"]
+        for col, header in enumerate(headers, 1):
+            cell = ws.cell(row=8, column=col)
+            cell.value = header
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_alignment
+            cell.border = thin_border
+        
+        # Данные по категориям
+        row = 9
+        for category in sorted(all_categories):
+            planned = plan_dict.get(category, 0)
+            spent = expense_dict.get(category, 0)
+            difference = spent - planned
+            
+            # Определяем статус
+            if spent == 0 and planned == 0:
+                status = "Нет данных"
+                status_color = "808080"
+            elif spent == 0:
+                status = "Не тратили"
+                status_color = "00B050"
+            elif planned == 0:
+                status = "Не планировали"
+                status_color = "FFC000"
+            elif spent > planned:
+                status = "Превышение"
+                status_color = "C00000"
+            elif spent < planned:
+                status = "Экономия"
+                status_color = "00B050"
+            else:
+                status = "В рамках плана"
+                status_color = "366092"
+            
+            # Процент выполнения
+            if planned > 0:
+                percent = (spent / planned) * 100
+            else:
+                percent = 0 if spent == 0 else float('inf')
+            
+            # Заполняем строку
+            ws.cell(row=row, column=1, value=category).border = thin_border
+            ws.cell(row=row, column=2, value=f"{planned:,.0f}").border = thin_border
+            ws.cell(row=row, column=3, value=f"{spent:,.0f}").border = thin_border
+            ws.cell(row=row, column=4, value=f"{difference:,.0f}").border = thin_border
+            
+            status_cell = ws.cell(row=row, column=5, value=status)
+            status_cell.border = thin_border
+            status_cell.fill = PatternFill(start_color=status_color, end_color=status_color, fill_type="solid")
+            status_cell.font = Font(color="FFFFFF", bold=True)
+            
+            if percent != float('inf'):
+                ws.cell(row=row, column=6, value=f"{percent:.1f}%").border = thin_border
+            else:
+                ws.cell(row=row, column=6, value="∞").border = thin_border
+            
+            row += 1
+        
+        # Автоматическая ширина столбцов
+        for column in ws.columns:
+            max_length = 0
+            column_letter = column[0].column_letter
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 50)
+            ws.column_dimensions[column_letter].width = adjusted_width
+        
+        # Сохраняем файл
+        excel_buffer = io.BytesIO()
+        wb.save(excel_buffer)
+        excel_buffer.seek(0)
+        
+        # Отправляем Excel файл
+        await update.message.reply_document(
+            document=excel_buffer,
+            filename=f"Аналитика_{get_month_name(month)}_{year}.xlsx",
+            caption=f"📊 Сравнительная таблица за {get_month_name(month)} {year}",
+            reply_markup=get_main_menu_keyboard()
+        )
+        
+    except Exception as e:
+        logger.error(f"Ошибка при создании Excel файла аналитики: {e}")
+        await update.message.reply_text(
+            f"❌ Ошибка при создании Excel файла: {str(e)}",
             reply_markup=get_main_menu_keyboard()
         )
 
