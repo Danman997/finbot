@@ -12,6 +12,9 @@ import re
 import schedule
 import time
 import pandas as pd
+import json
+import secrets
+import string
 
 # Настройки matplotlib для высокого качества
 plt.rcParams['figure.dpi'] = 300
@@ -334,7 +337,8 @@ def init_db():
                 id SERIAL PRIMARY KEY,
                 plan_month DATE NOT NULL UNIQUE,
                 total_amount NUMERIC(12,2) NOT NULL,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                group_id INTEGER DEFAULT 1
             );
         ''')
         cursor.execute('''
@@ -348,20 +352,58 @@ def init_db():
             );
         ''')
         
+        # Создаем таблицы для управления группами
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS groups (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(100) UNIQUE NOT NULL,
+                admin_user_id INTEGER NOT NULL,
+                max_members INTEGER DEFAULT 5,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                invitation_code VARCHAR(20) UNIQUE NOT NULL
+            );
+        ''')
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS group_members (
+                id SERIAL PRIMARY KEY,
+                group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+                user_id INTEGER NOT NULL,
+                phone VARCHAR(20) NOT NULL,
+                role VARCHAR(20) DEFAULT 'member',
+                joined_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            );
+        ''')
+        
+        # Добавляем group_id в существующие таблицы
+        try:
+            cursor.execute('ALTER TABLE expenses ADD COLUMN IF NOT EXISTS group_id INTEGER DEFAULT 1')
+            cursor.execute('ALTER TABLE payment_reminders ADD COLUMN IF NOT EXISTS group_id INTEGER DEFAULT 1')
+        except Exception as e:
+            logger.info(f"Столбцы group_id уже существуют или не могут быть добавлены: {e}")
+        
         conn.commit()
         conn.close()
         logger.info("База данных инициализирована (таблицы 'expenses' и 'payment_reminders' проверены/созданы).")
 
-def add_expense(amount, category, description, transaction_date):
+def add_expense(amount, category, description, transaction_date, user_id=None):
     conn = get_db_connection()
     if not conn:
         return False
     try:
         cursor = conn.cursor()
+        
+        # Определяем group_id для пользователя
+        group_id = 1  # По умолчанию
+        if user_id:
+            group_info = get_user_group(user_id)
+            if group_info:
+                group_id = group_info["id"]
+        
         cursor.execute('''
-            INSERT INTO expenses (amount, category, description, transaction_date)
-            VALUES (%s, %s, %s, %s)
-        ''', (amount, category, description, transaction_date))
+            INSERT INTO expenses (amount, category, description, transaction_date, group_id)
+            VALUES (%s, %s, %s, %s, %s)
+        ''', (amount, category, description, transaction_date, group_id))
         conn.commit()
         return True
     except Exception as e:
@@ -648,13 +690,44 @@ async def check_and_send_reminders(application):
     except Exception as e:
         logger.error(f"Ошибка при проверке напоминаний: {e}")
 
+# --- ЗАЩИТА БЛОКОВ ---
+# Константы для защиты блоков от несанкционированных изменений
+BLOCK_PROTECTION = {
+    "reports": True,
+    "corrections": True, 
+    "reminders": True,
+    "planning": True,
+    "analytics": True,
+    "expenses": True,
+    "training": True
+}
+
+def is_block_protected(block_name: str) -> bool:
+    """Проверяет, защищен ли блок от изменений"""
+    return BLOCK_PROTECTION.get(block_name, True)
+
+def validate_block_access(block_name: str, user_id: int) -> bool:
+    """Проверяет доступ пользователя к блоку (базовая защита)"""
+    if not is_block_protected(block_name):
+        return False
+    # В будущем здесь можно добавить проверку прав пользователя
+    return True
+
 # --- UI (User Interface) ---
 def get_main_menu_keyboard():
     keyboard = [
         [KeyboardButton("💸 Добавить расход"), KeyboardButton("📊 Отчеты")],
         [KeyboardButton("🔧 Исправить категории"), KeyboardButton("📚 Обучить модель")],
         [KeyboardButton("⏰ Напоминания"), KeyboardButton("📅 Планирование")],
-        [KeyboardButton("📈 Аналитика")]
+        [KeyboardButton("📈 Аналитика"), KeyboardButton("👥 Управление группой")]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+def get_admin_menu_keyboard():
+    """Клавиатура для администратора"""
+    keyboard = [
+        [KeyboardButton("👥 Добавить пользователя"), KeyboardButton("📋 Список пользователей")],
+        [KeyboardButton("🔙 Главное меню")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -700,12 +773,437 @@ async def manual_training_fallback(update: Update, context: ContextTypes.DEFAULT
 # --- Команды бота ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Отвечает на команду /start."""
+    user_id = update.effective_user.id
+    
+    # Проверяем, является ли пользователь администратором
+    users_data = load_authorized_users()
+    is_admin = user_id == users_data.get("admin")
+    
+    if is_admin:
+        # Показываем админ-меню
+        await update.message.reply_text(
+            "🔐 Админ-панель\n\nВыберите действие:",
+            reply_markup=get_admin_menu_keyboard()
+        )
+        return
+    
+    # Проверяем, авторизован ли пользователь
+    if not is_user_authorized(user_id):
+        # Проверяем, находится ли пользователь в какой-либо группе
+        if is_user_in_group(user_id):
+            # Пользователь в группе, но не в списке авторизованных
+            # Добавляем его автоматически
+            group_info = get_user_group(user_id)
+            if group_info:
+                success, message = add_authorized_user("group_member", user_id)
+                if success:
+                    await update.message.reply_text(
+                        f"✅ Добро пожаловать в группу '{group_info['name']}'!\n\n"
+                        "Теперь у вас есть доступ к боту.",
+                        reply_markup=get_main_menu_keyboard()
+                    )
+                    return
+                else:
+                    await update.message.reply_text(
+                        "❌ Ошибка при активации доступа. Обратитесь к администратору.",
+                        reply_markup=ReplyKeyboardRemove()
+                    )
+                    return
+        
+        # Пользователь не авторизован и не в группе
+        await update.message.reply_text(
+            "🔐 Добро пожаловать!\n\n"
+            "Для доступа к боту необходимо:\n"
+            "1️⃣ Ввести номер телефона (если вы уже в списке авторизованных)\n"
+            "2️⃣ Или ввести код приглашения в группу\n\n"
+            "📱 Введите номер телефона или код приглашения:",
+            reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
+        )
+        context.user_data['auth_state'] = 'waiting_for_phone_or_code'
+        return
+    
+    # Проверяем, находится ли пользователь в группе
+    if not is_user_in_group(user_id):
+        # Пользователь авторизован, но не в группе
+        await update.message.reply_text(
+            "👥 Для работы с ботом необходимо создать или присоединиться к группе.\n\n"
+            "📝 Введите название вашей группы (например: 'Семья Ивановых'):",
+            reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
+        )
+        context.user_data['auth_state'] = 'waiting_for_group_name'
+        return
+    
+    # Пользователь авторизован и в группе
     await update.message.reply_text(
         "Привет! Я твой помощник по учету расходов. Выбери опцию ниже:",
         reply_markup=get_main_menu_keyboard()
     )
 
+# --- АДМИН-ФУНКЦИИ ---
+async def admin_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик админ-меню"""
+    user_id = update.effective_user.id
+    text = update.message.text
+    
+    # Проверяем, является ли пользователь администратором
+    users_data = load_authorized_users()
+    if user_id != users_data.get("admin"):
+        await update.message.reply_text(
+            "❌ Доступ запрещен. Только администратор может использовать эту функцию.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return
+    
+    if text == "👥 Добавить пользователя":
+        await update.message.reply_text(
+            "📱 Введите номер телефона нового пользователя в формате:\n\n"
+            "+7XXXXXXXXXX или 8XXXXXXXXXX\n\n"
+            "Например: +77001234567",
+            reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+        )
+        context.user_data['admin_action'] = 'add_user'
+        return
+    
+    elif text == "📋 Список пользователей":
+        users = get_authorized_users_list()
+        if not users:
+            await update.message.reply_text(
+                "📋 Список пользователей пуст.",
+                reply_markup=get_admin_menu_keyboard()
+            )
+            return
+        
+        users_text = "📋 Список авторизованных пользователей:\n\n"
+        for i, user in enumerate(users, 1):
+            phone = user.get("phone", "Не указан")
+            added_date = user.get("added_date", "Не указана")
+            status = user.get("status", "Неизвестен")
+            telegram_id = user.get("telegram_id", "Не привязан")
+            
+            users_text += f"{i}. 📱 {phone}\n"
+            users_text += f"   🆔 Telegram ID: {telegram_id}\n"
+            users_text += f"   📅 Добавлен: {added_date[:10]}\n"
+            users_text += f"   ✅ Статус: {status}\n\n"
+        
+        await update.message.reply_text(
+            users_text,
+            reply_markup=get_admin_menu_keyboard()
+        )
+        return
+    
+    elif text == "🔙 Главное меню":
+        await update.message.reply_text(
+            "Главное меню:",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return
+    
+    else:
+        # Обработка ввода номера телефона
+        if context.user_data.get('admin_action') == 'add_user':
+            phone = text.strip()
+            
+            # Проверяем формат номера телефона
+            if not re.match(r'^(\+7|8)\d{10}$', phone):
+                await update.message.reply_text(
+                    "❌ Неверный формат номера телефона.\n\n"
+                    "Используйте формат: +77001234567 или 87001234567",
+                    reply_markup=get_admin_menu_keyboard()
+                )
+                context.user_data.pop('admin_action', None)
+                return
+            
+            # Добавляем пользователя
+            success, message = add_authorized_user(phone)
+            
+            if success:
+                await update.message.reply_text(
+                    f"✅ {message}\n\n"
+                    f"Номер телефона: {phone}\n\n"
+                    "Пользователь может теперь запустить бота командой /start",
+                    reply_markup=get_admin_menu_keyboard()
+                )
+            else:
+                await update.message.reply_text(
+                    f"❌ {message}",
+                    reply_markup=get_admin_menu_keyboard()
+                )
+            
+            context.user_data.pop('admin_action', None)
+            return
+        
+        await update.message.reply_text(
+            "❌ Неизвестная команда. Используйте кнопки меню.",
+            reply_markup=get_admin_menu_keyboard()
+        )
+
+# --- ОБРАБОТЧИК АУТЕНТИФИКАЦИИ ---
+async def auth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик аутентификации пользователей"""
+    user_id = update.effective_user.id
+    text = update.message.text
+    
+    if text == "🔙 Отмена":
+        await update.message.reply_text(
+            "❌ Доступ к боту отменен. Обратитесь к администратору.",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        context.user_data.pop('auth_state', None)
+        return
+    
+    auth_state = context.user_data.get('auth_state')
+    
+    if auth_state == 'waiting_for_phone_or_code':
+        # Пользователь ввел номер телефона или код приглашения
+        input_text = text.strip()
+        
+        # Проверяем, является ли это кодом приглашения (8 символов, буквы и цифры)
+        if re.match(r'^[A-Z0-9]{8}$', input_text):
+            # Это код приглашения
+            success, message = join_group_by_invitation(input_text, user_id, "invited")
+            if success:
+                # Добавляем пользователя в список авторизованных
+                add_authorized_user("invited", user_id)
+                
+                await update.message.reply_text(
+                    f"✅ {message}\n\n"
+                    "Теперь у вас есть доступ к боту!",
+                    reply_markup=get_main_menu_keyboard()
+                )
+                context.user_data.pop('auth_state', None)
+                return
+            else:
+                await update.message.reply_text(
+                    f"❌ {message}\n\n"
+                    "Попробуйте еще раз или введите номер телефона:",
+                    reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
+                )
+                return
+        
+        # Проверяем, является ли это номером телефона
+        if re.match(r'^(\+7|8)\d{10}$', input_text):
+            # Это номер телефона, проверяем, есть ли он в списке авторизованных
+            users_data = load_authorized_users()
+            phone_found = False
+            
+            for user in users_data.get("users", []):
+                if user.get("phone") == input_text:
+                    phone_found = True
+                    # Обновляем telegram_id для этого пользователя
+                    user["telegram_id"] = user_id
+                    save_authorized_users(users_data)
+                    break
+            
+            if phone_found:
+                await update.message.reply_text(
+                    "✅ Номер телефона найден!\n\n"
+                    "Теперь необходимо создать или присоединиться к группе.\n\n"
+                    "📝 Введите название вашей группы (например: 'Семья Ивановых'):",
+                    reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
+                )
+                context.user_data['auth_state'] = 'waiting_for_group_name'
+                return
+            else:
+                await update.message.reply_text(
+                    "❌ Номер телефона не найден в списке авторизованных пользователей.\n\n"
+                    "Попробуйте ввести код приглашения или обратитесь к администратору:",
+                    reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
+                )
+                return
+        
+        # Неверный формат
+        await update.message.reply_text(
+            "❌ Неверный формат.\n\n"
+            "Введите:\n"
+            "• Номер телефона в формате +77001234567 или 87001234567\n"
+            "• Или код приглашения (8 символов)\n\n"
+            "Попробуйте еще раз:",
+            reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
+        )
+        return
+    
+    elif auth_state == 'waiting_for_group_name':
+        # Пользователь ввел название группы
+        group_name = text.strip()
+        
+        if len(group_name) < 3:
+            await update.message.reply_text(
+                "❌ Название группы должно содержать минимум 3 символа.\n\n"
+                "Попробуйте еще раз:",
+                reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
+            )
+            return
+        
+        # Создаем группу
+        success, message, invitation_code = create_group(group_name, user_id)
+        
+        if success:
+            await update.message.reply_text(
+                f"✅ {message}\n\n"
+                f"🎯 Название группы: {group_name}\n"
+                f"🔑 Код приглашения: {invitation_code}\n\n"
+                "📱 Отправьте этот код членам семьи для присоединения к группе.\n\n"
+                "Теперь у вас есть доступ к боту!",
+                reply_markup=get_main_menu_keyboard()
+            )
+            context.user_data.pop('auth_state', None)
+        else:
+            await update.message.reply_text(
+                f"❌ {message}\n\n"
+                "Попробуйте другое название группы:",
+                reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
+            )
+        return
+
+# --- УПРАВЛЕНИЕ ГРУППОЙ ---
+async def group_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Меню управления группой"""
+    user_id = update.effective_user.id
+    
+    # Проверяем, находится ли пользователь в группе
+    if not is_user_in_group(user_id):
+        await update.message.reply_text(
+            "❌ Вы не состоите ни в одной группе.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return
+    
+    group_info = get_user_group(user_id)
+    if not group_info:
+        await update.message.reply_text(
+            "❌ Ошибка при получении информации о группе.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return
+    
+    # Проверяем, является ли пользователь админом группы
+    is_group_admin = group_info["admin_user_id"] == user_id
+    
+    if is_group_admin:
+        # Меню для админа группы
+        keyboard = [
+            [KeyboardButton("👥 Участники группы"), KeyboardButton("🔑 Код приглашения")],
+            [KeyboardButton("📊 Статистика группы"), KeyboardButton("🔙 Главное меню")]
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
+        await update.message.reply_text(
+            f"👥 Управление группой '{group_info['name']}'\n\n"
+            "Вы являетесь администратором этой группы.\n\n"
+            "Выберите действие:",
+            reply_markup=reply_markup
+        )
+    else:
+        # Меню для обычного участника
+        keyboard = [
+            [KeyboardButton("👥 Участники группы"), KeyboardButton("🔙 Главное меню")]
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
+        await update.message.reply_text(
+            f"👥 Группа '{group_info['name']}'\n\n"
+            "Выберите действие:",
+            reply_markup=reply_markup
+        )
+    
+    context.user_data['group_management_state'] = 'menu'
+
+async def group_management_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик управления группой"""
+    user_id = update.effective_user.id
+    text = update.message.text
+    
+    if text == "🔙 Главное меню":
+        await update.message.reply_text(
+            "Главное меню:",
+            reply_markup=get_main_menu_keyboard()
+        )
+        context.user_data.pop('group_management_state', None)
+        return
+    
+    # Проверяем, находится ли пользователь в группе
+    if not is_user_in_group(user_id):
+        await update.message.reply_text(
+            "❌ Вы не состоите ни в одной группе.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        context.user_data.pop('group_management_state', None)
+        return
+    
+    group_info = get_user_group(user_id)
+    if not group_info:
+        await update.message.reply_text(
+            "❌ Ошибка при получении информации о группе.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        context.user_data.pop('group_management_state', None)
+        return
+    
+    is_group_admin = group_info["admin_user_id"] == user_id
+    
+    if text == "👥 Участники группы":
+        members = get_group_members(group_info["id"])
+        if not members:
+            await update.message.reply_text(
+                "❌ Ошибка при получении списка участников.",
+                reply_markup=get_main_menu_keyboard()
+            )
+            return
+        
+        members_text = f"👥 Участники группы '{group_info['name']}':\n\n"
+        for i, member in enumerate(members, 1):
+            role_emoji = "👑" if member["role"] == "admin" else "👤"
+            members_text += f"{i}. {role_emoji} {member['phone']}\n"
+            members_text += f"   🆔 ID: {member['user_id']}\n"
+            members_text += f"   📅 Присоединился: {member['joined_at'].strftime('%d.%m.%Y') if member['joined_at'] else 'Неизвестно'}\n\n"
+        
+        await update.message.reply_text(
+            members_text,
+            reply_markup=get_main_menu_keyboard()
+        )
+        context.user_data.pop('group_management_state', None)
+        return
+    
+    elif text == "🔑 Код приглашения" and is_group_admin:
+        await update.message.reply_text(
+            f"🔑 Код приглашения для группы '{group_info['name']}':\n\n"
+            f"📱 {group_info['invitation_code']}\n\n"
+            "📤 Отправьте этот код членам семьи для присоединения к группе.\n\n"
+            "⚠️ Код действителен только для вашей группы.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        context.user_data.pop('group_management_state', None)
+        return
+    
+    elif text == "📊 Статистика группы" and is_group_admin:
+        # Здесь можно добавить статистику по группе
+        await update.message.reply_text(
+            f"📊 Статистика группы '{group_info['name']}'\n\n"
+            "Функция в разработке.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        context.user_data.pop('group_management_state', None)
+        return
+    
+    else:
+        await update.message.reply_text(
+            "❌ Неизвестная команда. Используйте кнопки меню.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        context.user_data.pop('group_management_state', None)
+        return
+
 async def report_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_id = update.effective_user.id
+    
+    # Проверяем защиту блока отчетов
+    if not validate_block_access("reports", user_id):
+        await update.message.reply_text(
+            "❌ Доступ к отчетам ограничен.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+    
     await update.message.reply_text(
         "За какой период вы хотите отчет?",
         reply_markup=get_report_period_keyboard()
@@ -714,6 +1212,16 @@ async def report_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
 async def correction_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Меню исправления категорий"""
+    user_id = update.effective_user.id
+    
+    # Проверяем защиту блока исправлений
+    if not validate_block_access("corrections", user_id):
+        await update.message.reply_text(
+            "❌ Доступ к исправлениям ограничен.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+    
     keyboard = [
         [KeyboardButton("1️⃣ Исправить расход")],
         [KeyboardButton("2️⃣ Удалить расход")],
@@ -966,6 +1474,16 @@ async def retrain_model_on_corrected_data(update: Update, context: ContextTypes.
 
 async def manual_training(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Ручное обучение модели на всех данных из БД"""
+    user_id = update.effective_user.id
+    
+    # Проверяем защиту блока обучения
+    if not validate_block_access("training", user_id):
+        await update.message.reply_text(
+            "❌ Доступ к обучению модели ограничен.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return
+    
     try:
         training_data = get_all_expenses_for_training()
         
@@ -998,6 +1516,16 @@ async def manual_training(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 # --- Функции для работы с напоминаниями ---
 async def reminder_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Главное меню напоминаний"""
+    user_id = update.effective_user.id
+    
+    # Проверяем защиту блока напоминаний
+    if not validate_block_access("reminders", user_id):
+        await update.message.reply_text(
+            "❌ Доступ к напоминаниям ограничен.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+    
     text = update.message.text
     
     # Если это первое нажатие на кнопку "⏰ Напоминания"
@@ -1575,6 +2103,16 @@ def parse_date_period(text):
     return start_date, end_date
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    
+    # Проверяем защиту блока расходов
+    if not validate_block_access("expenses", user_id):
+        await update.message.reply_text(
+            "❌ Доступ к добавлению расходов ограничен.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return
+    
     text = update.message.text.strip()
     
     # Проверяем специальные команды
@@ -1592,6 +2130,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
     elif text == "📈 Аналитика":
         await analytics_menu(update, context)
+        return
+    elif text == "👥 Управление группой":
+        await group_management_menu(update, context)
         return
     elif text in ["💸 Добавить расход", "📊 Отчеты", "Сегодня", "Неделя", "Месяц", "Год"]:
         if text == "💸 Добавить расход":
@@ -1624,7 +2165,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         amount = float(amount_str)
         category = classify_expense(description)
         transaction_date = datetime.now(timezone.utc)
-        if add_expense(amount, category, description, transaction_date): 
+        if add_expense(amount, category, description, transaction_date, user_id): 
             await update.message.reply_text(
                 f"✅ Расход '{description}' ({amount:.2f}) записан в категорию '{category}'!\n\n"
                 f"💡 Если категория неправильная, используйте '🔧 Исправить категории' для исправления.",
@@ -1680,6 +2221,16 @@ ANALYTICS_REPORT_STATE = 32
 # --- Функции для аналитики ---
 async def analytics_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показать меню аналитики"""
+    user_id = update.effective_user.id
+    
+    # Проверяем защиту блока аналитики
+    if not validate_block_access("analytics", user_id):
+        await update.message.reply_text(
+            "❌ Доступ к аналитике ограничен.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+    
     keyboard = [
         [KeyboardButton("📊 Сравнение с планом")],
         [KeyboardButton("🔙 Назад")]
@@ -2071,6 +2622,25 @@ def main():
     application.add_handler(planning_conv_handler)
     application.add_handler(analytics_conv_handler)
     application.add_handler(CommandHandler("start", start))
+    
+    # Обработчик для админ-меню (должен быть перед общим обработчиком сообщений)
+    application.add_handler(MessageHandler(
+        filters.Regex("^(👥 Добавить пользователя|📋 Список пользователей|🔙 Главное меню)$"), 
+        admin_menu_handler
+    ))
+    
+    # Обработчик для аутентификации (должен быть перед общим обработчиком сообщений)
+    application.add_handler(MessageHandler(
+        filters.Regex("^(🔙 Отмена)$"), 
+        auth_handler
+    ))
+    
+    # Обработчик для управления группой (должен быть перед общим обработчиком сообщений)
+    application.add_handler(MessageHandler(
+        filters.Regex("^(👥 Участники группы|🔑 Код приглашения|📊 Статистика группы|🔙 Главное меню)$"), 
+        group_management_handler
+    ))
+    
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     logger.info("Бот запущен!")
@@ -2327,6 +2897,16 @@ async def planning_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 # --- Меню планирования ---
 async def planning_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_id = update.effective_user.id
+    
+    # Проверяем защиту блока планирования
+    if not validate_block_access("planning", user_id):
+        await update.message.reply_text(
+            "❌ Доступ к планированию ограничен.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+    
     text = update.message.text
     if text == "📅 Планирование":
         await update.message.reply_text(
@@ -2873,6 +3453,262 @@ def get_budget_plan_items(plan_id: int):
         return []
     finally:
         conn.close()
+
+# --- АДМИН-ФУНКЦИОНАЛЬНОСТЬ ---
+# Константы для админ-системы
+ADMIN_USER_ID = 498410375  # Замените на ваш Telegram ID
+USERS_FILE = "authorized_users.json"
+
+def load_authorized_users():
+    """Загружает список авторизованных пользователей из файла"""
+    try:
+        if os.path.exists(USERS_FILE):
+            with open(USERS_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        return {"users": [], "admin": ADMIN_USER_ID}
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке пользователей: {e}")
+        return {"users": [], "admin": ADMIN_USER_ID}
+
+def save_authorized_users(users_data):
+    """Сохраняет список авторизованных пользователей в файл"""
+    try:
+        with open(USERS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(users_data, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка при сохранении пользователей: {e}")
+        return False
+
+def is_user_authorized(user_id: int) -> bool:
+    """Проверяет, авторизован ли пользователь"""
+    users_data = load_authorized_users()
+    
+    # Проверяем, является ли пользователь админом
+    if user_id == users_data.get("admin"):
+        return True
+    
+    # Проверяем, есть ли пользователь в списке авторизованных
+    for user in users_data.get("users", []):
+        if user.get("telegram_id") == user_id:
+            return True
+    
+    return False
+
+def add_authorized_user(phone: str, user_id: int = None) -> tuple[bool, str]:
+    """Добавляет нового авторизованного пользователя"""
+    try:
+        users_data = load_authorized_users()
+        
+        # Проверяем, не существует ли уже пользователь с таким телефоном
+        for user in users_data.get("users", []):
+            if user.get("phone") == phone:
+                return False, "Пользователь с таким телефоном уже существует"
+        
+        # Добавляем нового пользователя
+        new_user = {
+            "phone": phone,
+            "added_date": datetime.now().isoformat(),
+            "status": "active"
+        }
+        
+        if user_id:
+            new_user["telegram_id"] = user_id
+        
+        users_data["users"].append(new_user)
+        
+        if save_authorized_users(users_data):
+            return True, "Пользователь успешно добавлен"
+        else:
+            return False, "Ошибка при сохранении"
+            
+    except Exception as e:
+        logger.error(f"Ошибка при добавлении пользователя: {e}")
+        return False, f"Ошибка: {str(e)}"
+
+def get_authorized_users_list() -> list:
+    """Возвращает список всех авторизованных пользователей"""
+    users_data = load_authorized_users()
+    return users_data.get("users", [])
+
+# --- ФУНКЦИИ УПРАВЛЕНИЯ ГРУППАМИ ---
+def create_group(name: str, admin_user_id: int) -> tuple[bool, str, str]:
+    """Создает новую группу и возвращает (успех, сообщение, код приглашения)"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return False, "Ошибка подключения к базе данных", ""
+        
+        cursor = conn.cursor()
+        
+        # Генерируем уникальный код приглашения
+        import secrets
+        import string
+        invitation_code = ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(8))
+        
+        # Создаем группу
+        cursor.execute('''
+            INSERT INTO groups (name, admin_user_id, invitation_code)
+            VALUES (%s, %s, %s)
+            RETURNING id
+        ''', (name, admin_user_id, invitation_code))
+        
+        group_id = cursor.fetchone()[0]
+        
+        # Добавляем админа как участника группы
+        cursor.execute('''
+            INSERT INTO group_members (group_id, user_id, phone, role)
+            VALUES (%s, %s, %s, %s)
+        ''', (group_id, admin_user_id, "admin", "admin"))
+        
+        conn.commit()
+        conn.close()
+        
+        return True, f"Группа '{name}' успешно создана", invitation_code
+        
+    except Exception as e:
+        logger.error(f"Ошибка при создании группы: {e}")
+        if conn:
+            conn.rollback()
+            conn.close()
+        return False, f"Ошибка при создании группы: {str(e)}", ""
+
+def get_user_group(user_id: int) -> dict:
+    """Получает информацию о группе пользователя"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return None
+        
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT g.id, g.name, g.admin_user_id, g.invitation_code, gm.role
+            FROM groups g
+            JOIN group_members gm ON g.id = gm.group_id
+            WHERE gm.user_id = %s
+        ''', (user_id,))
+        
+        result = cursor.fetchone()
+        conn.close()
+        
+        if result:
+            return {
+                "id": result[0],
+                "name": result[1],
+                "admin_user_id": result[2],
+                "invitation_code": result[3],
+                "role": result[4]
+            }
+        return None
+        
+    except Exception as e:
+        logger.error(f"Ошибка при получении группы пользователя: {e}")
+        return None
+
+def join_group_by_invitation(invitation_code: str, user_id: int, phone: str) -> tuple[bool, str]:
+    """Присоединяет пользователя к группе по коду приглашения"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return False, "Ошибка подключения к базе данных"
+        
+        cursor = conn.cursor()
+        
+        # Проверяем код приглашения
+        cursor.execute('''
+            SELECT id, name, max_members
+            FROM groups
+            WHERE invitation_code = %s
+        ''', (invitation_code,))
+        
+        group_info = cursor.fetchone()
+        if not group_info:
+            return False, "Неверный код приглашения"
+        
+        group_id, group_name, max_members = group_info
+        
+        # Проверяем количество участников
+        cursor.execute('''
+            SELECT COUNT(*) FROM group_members WHERE group_id = %s
+        ''', (group_id,))
+        
+        current_members = cursor.fetchone()[0]
+        if current_members >= max_members:
+            return False, f"Группа '{group_name}' уже заполнена (максимум {max_members} участников)"
+        
+        # Проверяем, не является ли пользователь уже участником
+        cursor.execute('''
+            SELECT id FROM group_members 
+            WHERE group_id = %s AND user_id = %s
+        ''', (group_id, user_id))
+        
+        if cursor.fetchone():
+            return False, "Вы уже являетесь участником этой группы"
+        
+        # Добавляем пользователя в группу
+        cursor.execute('''
+            INSERT INTO group_members (group_id, user_id, phone, role)
+            VALUES (%s, %s, %s, %s)
+        ''', (group_id, user_id, phone, "member"))
+        
+        conn.commit()
+        conn.close()
+        
+        return True, f"Вы успешно присоединились к группе '{group_name}'"
+        
+    except Exception as e:
+        logger.error(f"Ошибка при присоединении к группе: {e}")
+        if conn:
+            conn.rollback()
+            conn.close()
+        return False, f"Ошибка при присоединении к группе: {str(e)}"
+
+def is_user_in_group(user_id: int) -> bool:
+    """Проверяет, находится ли пользователь в какой-либо группе"""
+    return get_user_group(user_id) is not None
+
+def get_group_members(group_id: int) -> list:
+    """Получает список участников группы"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return []
+        
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT gm.user_id, gm.phone, gm.role, gm.joined_at
+            FROM group_members gm
+            WHERE gm.group_id = %s
+            ORDER BY gm.joined_at
+        ''', (group_id,))
+        
+        members = []
+        for row in cursor.fetchall():
+            members.append({
+                "user_id": row[0],
+                "phone": row[1],
+                "role": row[2],
+                "joined_at": row[3]
+            })
+        
+        conn.close()
+        return members
+        
+    except Exception as e:
+        logger.error(f"Ошибка при получении участников группы: {e}")
+        return []
+
+# Обновляем функцию проверки доступа
+def validate_block_access(block_name: str, user_id: int) -> bool:
+    """Проверяет доступ пользователя к блоку"""
+    if not is_block_protected(block_name):
+        return False
+    
+    # Проверяем авторизацию пользователя
+    if not is_user_authorized(user_id):
+        return False
+    
+    return True
 
 if __name__ == "__main__":
     main()
