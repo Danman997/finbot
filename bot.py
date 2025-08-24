@@ -647,6 +647,8 @@ def get_categories_keyboard():
         if i + 1 < len(categories):
             row.append(KeyboardButton(categories[i + 1]))
         keyboard.append(row)
+    # Добавляем кнопку для создания новой категории
+    keyboard.append([KeyboardButton("➕ Добавить новую категорию")])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
 
 def get_categories_keyboard_with_done():
@@ -658,6 +660,8 @@ def get_categories_keyboard_with_done():
         if i + 1 < len(categories):
             row.append(KeyboardButton(categories[i + 1]))
         keyboard.append(row)
+    # Добавляем кнопку для создания новой категории
+    keyboard.append([KeyboardButton("➕ Добавить новую категорию")])
     keyboard.append([KeyboardButton("Готово")])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -745,15 +749,33 @@ async def expense_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def category_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Выбор новой категории для расхода"""
-    new_category = update.message.text
+    new_category = update.message.text.strip()
     
-    if new_category not in CATEGORIES:
+    # Проверяем специальную кнопку для создания новой категории
+    if new_category == "➕ Добавить новую категорию":
         await update.message.reply_text(
-            "Пожалуйста, выберите категорию из предложенных.",
+            "Введите название новой категории:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return CUSTOM_CATEGORY_STATE
+    
+    # Проверяем, что категория не пустая
+    if not new_category:
+        await update.message.reply_text(
+            "Название категории не может быть пустым. Попробуйте снова:",
             reply_markup=get_categories_keyboard()
         )
         return CATEGORY_CHOICE_STATE
     
+    # Проверяем, существует ли категория в списке
+    if new_category not in CATEGORIES:
+        await update.message.reply_text(
+            "Пожалуйста, выберите категорию из предложенных или нажмите '➕ Добавить новую категорию':",
+            reply_markup=get_categories_keyboard()
+        )
+        return CATEGORY_CHOICE_STATE
+    
+    # Получаем выбранный расход
     selected_expense = context.user_data.get('selected_expense')
     if not selected_expense:
         await update.message.reply_text(
@@ -768,7 +790,11 @@ async def category_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if update_expense_category(exp_id, new_category):
         context.user_data['selected_expense'] = (exp_id, amount, desc, new_category, date)
         await update.message.reply_text(
-            "Категория обновлена. Теперь введите новую сумму (например: 1500.50) или отправьте текущую сумму без изменений:",
+            f"✅ Категория обновлена!\n\n"
+            f"📝 {desc}\n"
+            f"🏷️ Новая категория: {new_category}\n"
+            f"💰 Сумма: {amount} Тг\n\n"
+            f"Теперь введите новую сумму (например: 1500.50) или отправьте текущую сумму без изменений:",
             reply_markup=ReplyKeyboardRemove()
         )
         return AMOUNT_EDIT_STATE
@@ -1489,14 +1515,15 @@ PERIOD_CHOICE_STATE = 1
 EXPENSE_CHOICE_STATE = 2
 CATEGORY_CHOICE_STATE = 3
 AMOUNT_EDIT_STATE = 4
-REMINDER_MENU_STATE = 5
-REMINDER_TITLE_STATE = 6
-REMINDER_DESC_STATE = 7
-REMINDER_AMOUNT_STATE = 8
-REMINDER_START_DATE_STATE = 9
-REMINDER_END_DATE_STATE = 10
-REMINDER_MANAGE_STATE = 11
-REMINDER_DELETE_STATE = 12
+CUSTOM_CATEGORY_STATE = 5
+REMINDER_MENU_STATE = 6
+REMINDER_TITLE_STATE = 7
+REMINDER_DESC_STATE = 8
+REMINDER_AMOUNT_STATE = 9
+REMINDER_START_DATE_STATE = 10
+REMINDER_END_DATE_STATE = 11
+REMINDER_MANAGE_STATE = 12
+REMINDER_DELETE_STATE = 13
 
 # --- Доп. состояния для планирования бюджета ---
 PLAN_MENU_STATE = 19
@@ -1535,6 +1562,7 @@ def main():
         states={
             EXPENSE_CHOICE_STATE: [MessageHandler(filters.Regex("^[0-9]+$"), expense_choice)],
             CATEGORY_CHOICE_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, category_choice)],
+            CUSTOM_CATEGORY_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, custom_category_input)],
             AMOUNT_EDIT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, amount_edit)],
         },
         fallbacks=[MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)],
@@ -1579,6 +1607,7 @@ def main():
             PLAN_AMOUNT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_amount)],
             PLAN_COMMENT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_comment)],
             PLAN_DELETE_STATE: [MessageHandler(filters.Regex("^(❌ Удалить план \d+|🔙 Назад)$"), planning_delete_confirm)],
+            CUSTOM_CATEGORY_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, custom_category_input)],
         },
         fallbacks=[MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)],
         allow_reentry=True
@@ -1746,9 +1775,20 @@ async def planning_category(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 	category = update.message.text.strip()
 	if category == 'Готово':
 		return await planning_summary(update, context)
+	
+	# Проверяем специальную кнопку для создания новой категории
+	if category == "➕ Добавить новую категорию":
+		await update.message.reply_text(
+			"Введите название новой категории для планирования бюджета:",
+			reply_markup=ReplyKeyboardRemove()
+		)
+		context.user_data['creating_custom_category'] = True
+		return CUSTOM_CATEGORY_STATE
+	
 	if category not in CATEGORIES:
-		await update.message.reply_text("Выберите категорию с клавиатуры или отправьте 'Готово' для завершения.")
+		await update.message.reply_text("Выберите категорию с клавиатуры, нажмите '➕ Добавить новую категорию' или отправьте 'Готово' для завершения.")
 		return PLAN_CATEGORY_STATE
+	
 	context.user_data['current_category'] = category
 	await update.message.reply_text(f"Сколько заложить на категорию '{category}'?")
 	return PLAN_AMOUNT_STATE
@@ -2025,6 +2065,70 @@ def delete_budget_plan(plan_id):
         return False
     finally:
         conn.close()
+
+async def custom_category_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка ввода новой пользовательской категории"""
+    new_category = update.message.text.strip()
+    
+    if not new_category:
+        await update.message.reply_text(
+            "Название категории не может быть пустым. Попробуйте снова:",
+            reply_markup=get_categories_keyboard()
+        )
+        return CATEGORY_CHOICE_STATE
+    
+    # Проверяем, не существует ли уже такая категория
+    if new_category in CATEGORIES:
+        await update.message.reply_text(
+            f"Категория '{new_category}' уже существует. Выберите её из списка или введите другую:",
+            reply_markup=get_categories_keyboard()
+        )
+        return CATEGORY_CHOICE_STATE
+    
+    # Добавляем новую категорию в словарь
+    CATEGORIES[new_category] = []
+    
+    # Проверяем, из какого контекста мы пришли
+    if context.user_data.get('creating_custom_category'):
+        # Мы в процессе планирования бюджета
+        context.user_data['current_category'] = new_category
+        context.user_data.pop('creating_custom_category', None)  # Убираем флаг
+        await update.message.reply_text(
+            f"✅ Создана новая категория '{new_category}'!\n\n"
+            f"Сколько заложить на категорию '{new_category}'?",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return PLAN_AMOUNT_STATE
+    else:
+        # Мы в процессе исправления категории
+        selected_expense = context.user_data.get('selected_expense')
+        if not selected_expense:
+            await update.message.reply_text(
+                "Ошибка: расход не найден. Попробуйте снова.",
+                reply_markup=get_main_menu_keyboard()
+            )
+            return ConversationHandler.END
+        
+        exp_id, amount, desc, old_cat, date = selected_expense
+        
+        # Обновляем категорию в базе данных
+        if update_expense_category(exp_id, new_category):
+            context.user_data['selected_expense'] = (exp_id, amount, desc, new_category, date)
+            await update.message.reply_text(
+                f"✅ Создана новая категория '{new_category}' и применена к расходу!\n\n"
+                f"📝 {desc}\n"
+                f"🏷️ Новая категория: {new_category}\n"
+                f"💰 Сумма: {amount} Тг\n\n"
+                f"Теперь введите новую сумму (например: 1500.50) или отправьте текущую сумму без изменений:",
+                reply_markup=ReplyKeyboardRemove()
+            )
+            return AMOUNT_EDIT_STATE
+        else:
+            await update.message.reply_text(
+                "❌ Ошибка при обновлении категории. Попробуйте снова.",
+                reply_markup=get_main_menu_keyboard()
+            )
+            return ConversationHandler.END
 
 if __name__ == "__main__":
     main()
