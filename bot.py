@@ -789,51 +789,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     
     # Проверяем, авторизован ли пользователь
     if not is_user_authorized(user_id):
-        # Проверяем, находится ли пользователь в какой-либо группе
-        if is_user_in_group(user_id):
-            # Пользователь в группе, но не в списке авторизованных
-            # Добавляем его автоматически
-            group_info = get_user_group(user_id)
-            if group_info:
-                success, message = add_authorized_user("group_member", user_id)
-                if success:
-                    await update.message.reply_text(
-                        f"✅ Добро пожаловать в группу '{group_info['name']}'!\n\n"
-                        "Теперь у вас есть доступ к боту.",
-                        reply_markup=get_main_menu_keyboard()
-                    )
-                    return
-                else:
-                    await update.message.reply_text(
-                        "❌ Ошибка при активации доступа. Обратитесь к администратору.",
-                        reply_markup=ReplyKeyboardRemove()
-                    )
-                    return
-        
-        # Пользователь не авторизован и не в группе
+        # Пользователь не авторизован - просим ввести username
         await update.message.reply_text(
             "🔐 Добро пожаловать!\n\n"
-            "Для доступа к боту необходимо:\n"
-            "1️⃣ Ввести ваше имя (если вы уже в списке авторизованных)\n"
-            "2️⃣ Или ввести код приглашения в группу\n\n"
-            "👤 Введите ваше имя или код приглашения:",
+            "Для доступа к боту необходимо ввести ваше имя.\n"
+            "👤 Введите ваше имя:",
             reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
         )
-        context.user_data['auth_state'] = 'waiting_for_username_or_code'
-        return 'waiting_for_username_or_code'
+        context.user_data['auth_state'] = 'waiting_for_username'
+        return 'waiting_for_username'
     
-    # Проверяем, находится ли пользователь в группе
-    if not is_user_in_group(user_id):
-        # Пользователь авторизован, но не в группе
-        await update.message.reply_text(
-            "👥 Для работы с ботом необходимо создать или присоединиться к группе.\n\n"
-            "📝 Введите название вашей группы (например: 'Семья Ивановых'):",
-            reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
-        )
-        context.user_data['auth_state'] = 'waiting_for_group_name'
-        return 'waiting_for_group_name'
-    
-    # Пользователь авторизован и в группе
+    # Пользователь авторизован - показываем главное меню
     await update.message.reply_text(
         "Привет! Я твой помощник по учету расходов. Выбери опцию ниже:",
         reply_markup=get_main_menu_keyboard()
@@ -970,116 +936,53 @@ async def auth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     
     auth_state = context.user_data.get('auth_state')
     
-    if auth_state == 'waiting_for_username_or_code':
-        # Пользователь ввел имя пользователя или код приглашения
-        input_text = text.strip()
+    if auth_state == 'waiting_for_username':
+        # Пользователь ввел имя пользователя
+        username = text.strip()
         
-        # Проверяем, является ли это кодом приглашения (8 символов, буквы и цифры)
-        if re.match(r'^[A-Z0-9]{8}$', input_text):
-            # Это код приглашения
-            success, message = join_group_by_invitation(input_text, user_id, "invited")
-            if success:
-                # Добавляем пользователя в список авторизованных
-                add_authorized_user("invited", user_id)
-                
-                await update.message.reply_text(
-                    f"✅ {message}\n\n"
-                    "Теперь у вас есть доступ к боту!",
-                    reply_markup=get_main_menu_keyboard()
-                )
-                context.user_data.pop('auth_state', None)
-                return ConversationHandler.END
-            else:
-                await update.message.reply_text(
-                    f"❌ {message}\n\n"
-                    "Попробуйте еще раз или введите ваше имя:",
-                    reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
-                )
-                return 'waiting_for_username_or_code'
-        
-        # Проверяем, является ли это именем пользователя
-        if len(input_text) >= 2:
-            # Это имя пользователя, проверяем, есть ли оно в списке авторизованных
-            if is_username_authorized(input_text):
-                logger.info(f"Пользователь {user_id} авторизован по имени '{input_text}'")
-                # Обновляем telegram_id для этого пользователя
-                users_data = load_authorized_users()
-                for user in users_data.get("users", []):
-                    if user.get("username") == input_text:
-                        user["telegram_id"] = user_id
-                        save_authorized_users(users_data)
-                        logger.info(f"Обновлен telegram_id для пользователя '{input_text}': {user_id}")
-                        break
-                
-                await update.message.reply_text(
-                    "✅ Ваше имя найдено в списке авторизованных пользователей!\n\n"
-                    "Теперь необходимо создать или присоединиться к группе.\n\n"
-                    "📝 Введите название вашей группы (например: 'Семья Ивановых'):",
-                    reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
-                )
-                context.user_data['auth_state'] = 'waiting_for_group_name'
-                return 'waiting_for_group_name'
-            else:
-                await update.message.reply_text(
-                    "❌ Ваше имя не найдено в списке авторизованных пользователей.\n\n"
-                    "Попробуйте ввести код приглашения или обратитесь к администратору:",
-                    reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
-                )
-                return 'waiting_for_username_or_code'
-        
-        # Неверный формат
-        await update.message.reply_text(
-            "❌ Неверный формат.\n\n"
-            "Введите:\n"
-            "• Ваше имя (минимум 2 символа)\n"
-            "• Или код приглашения (8 символов)\n\n"
-            "Попробуйте еще раз:",
-            reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
-        )
-        return 'waiting_for_username_or_code'
-    
-    elif auth_state == 'waiting_for_group_name':
-        # Пользователь ввел название группы
-        group_name = text.strip()
-        
-        if len(group_name) < 3:
+        if len(username) < 2:
             await update.message.reply_text(
-                "❌ Название группы должно содержать минимум 3 символа.\n\n"
+                "❌ Имя должно содержать минимум 2 символа.\n\n"
                 "Попробуйте еще раз:",
                 reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
             )
-            return 'waiting_for_group_name'
+            return 'waiting_for_username'
         
-        # Создаем группу
-        success, message, invitation_code = create_group(group_name, user_id)
-        
-        if success:
-            # Проверяем, что пользователь теперь в группе
-            if is_user_in_group(user_id):
-                await update.message.reply_text(
-                    f"✅ {message}\n\n"
-                    f"🎯 Название группы: {group_name}\n"
-                    f"🔑 Код приглашения: {invitation_code}\n\n"
-                    "📱 Отправьте этот код членам семьи для присоединения к группе.\n\n"
-                    "Теперь у вас есть доступ к боту!",
-                    reply_markup=get_main_menu_keyboard()
-                )
-                context.user_data.pop('auth_state', None)
-                return ConversationHandler.END
-            else:
-                await update.message.reply_text(
-                    "❌ Группа создана, но возникла ошибка при добавлении вас как участника.\n\n"
-                    "Обратитесь к администратору.",
-                    reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
-                )
-                return 'waiting_for_group_name'
+        # Проверяем, есть ли username в списке авторизованных
+        if is_username_authorized(username):
+            logger.info(f"Пользователь {user_id} авторизован по имени '{username}'")
+            
+            # Обновляем telegram_id для этого пользователя
+            users_data = load_authorized_users()
+            for user in users_data.get("users", []):
+                if user.get("username") == username:
+                    user["telegram_id"] = user_id
+                    save_authorized_users(users_data)
+                    logger.info(f"Обновлен telegram_id для пользователя '{username}': {user_id}")
+                    break
+            
+            await update.message.reply_text(
+                "✅ Ваше имя найдено в списке авторизованных пользователей!\n\n"
+                "Теперь у вас есть доступ к боту!",
+                reply_markup=get_main_menu_keyboard()
+            )
+            context.user_data.pop('auth_state', None)
+            return ConversationHandler.END
         else:
             await update.message.reply_text(
-                f"❌ {message}\n\n"
-                "Попробуйте другое название группы:",
+                "❌ Ваше имя не найдено в списке авторизованных пользователей.\n\n"
+                "Обратитесь к администратору для добавления в список:",
                 reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
             )
-            return 'waiting_for_group_name'
+            return 'waiting_for_username'
+    
+    # Неизвестное состояние
+    await update.message.reply_text(
+        "❌ Ошибка авторизации. Попробуйте еще раз.",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    context.user_data.pop('auth_state', None)
+    return ConversationHandler.END
 
 # --- УПРАВЛЕНИЕ ГРУППОЙ ---
 async def group_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2672,12 +2575,8 @@ def main():
             CommandHandler("start", start)
         ],
         states={
-            'waiting_for_username_or_code': [
+            'waiting_for_username': [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, auth_handler)
-            ],
-            'waiting_for_group_name': [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, auth_handler),
-                MessageHandler(filters.Regex("^🔙 Отмена$"), auth_handler)
             ]
         },
         fallbacks=[CommandHandler("start", start)],
@@ -3536,26 +3435,37 @@ def is_user_authorized(user_id: int) -> bool:
     """Проверяет, авторизован ли пользователь"""
     users_data = load_authorized_users()
     
+    logger.info(f"Проверка авторизации для user_id: {user_id}")
+    logger.info(f"Данные пользователей: {users_data}")
+    
     # Проверяем, является ли пользователь админом
     if user_id == users_data.get("admin"):
+        logger.info(f"Пользователь {user_id} является админом")
         return True
     
     # Проверяем, есть ли пользователь в списке авторизованных
     for user in users_data.get("users", []):
         if user.get("telegram_id") == user_id:
+            logger.info(f"Пользователь {user_id} найден в списке авторизованных")
             return True
     
+    logger.info(f"Пользователь {user_id} не авторизован")
     return False
 
 def is_username_authorized(username: str) -> bool:
     """Проверяет, авторизован ли пользователь по имени"""
     users_data = load_authorized_users()
     
+    logger.info(f"Проверка username '{username}' в списке авторизованных")
+    logger.info(f"Данные пользователей: {users_data}")
+    
     # Проверяем, есть ли пользователь с таким именем в списке авторизованных
     for user in users_data.get("users", []):
         if user.get("username") == username:
+            logger.info(f"Username '{username}' найден в списке авторизованных")
             return True
     
+    logger.info(f"Username '{username}' не найден в списке авторизованных")
     return False
 
 def add_authorized_user(username: str, user_id: int = None) -> tuple[bool, str]:
