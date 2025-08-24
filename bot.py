@@ -1914,7 +1914,9 @@ def get_monthly_expenses(month: int, year: int):
             ORDER BY total DESC
         ''', (month, year))
         
-        return cursor.fetchall()
+        # Приводим все суммы к float для совместимости
+        rows = cursor.fetchall()
+        return [(row[0], float(row[1])) for row in rows]
     except Exception as e:
         logger.error(f"Ошибка при получении расходов за месяц: {e}")
         return []
@@ -1936,7 +1938,9 @@ def get_budget_plan_items(plan_id: int):
             ORDER BY amount DESC
         ''', (plan_id,))
         
-        return cursor.fetchall()
+        # Приводим все суммы к float для совместимости
+        rows = cursor.fetchall()
+        return [(row[0], float(row[1]), row[2]) for row in rows]
     except Exception as e:
         logger.error(f"Ошибка при получении элементов плана: {e}")
         return []
@@ -2133,7 +2137,9 @@ def get_comparison_data():
             LIMIT 6
         ''')
         
-        return cursor.fetchall()
+        # Приводим все суммы к float для совместимости
+        rows = cursor.fetchall()
+        return [(int(row[0]), int(row[1]), float(row[2]) if row[2] else 0.0, float(row[3]) if row[3] else 0.0) for row in rows]
     except Exception as e:
         logger.error(f"Ошибка при получении данных для сравнения: {e}")
         return []
@@ -2483,7 +2489,9 @@ def get_budget_plan_by_month(month: int, year: int):
 		''', (month, year))
 		row = cursor.fetchone()
 		if row:
-			return (row[0], float(row[1]))
+			# Приводим Decimal к float для совместимости
+			total_amount = float(row[1]) if row[1] is not None else 0.0
+			return (row[0], total_amount)
 		return None
 	except Exception as e:
 		logger.error(f"Ошибка при получении плана бюджета по месяцу: {e}")
