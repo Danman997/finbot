@@ -923,9 +923,11 @@ async def admin_username_input(update: Update, context: ContextTypes.DEFAULT_TYP
         return 'waiting_for_username'
     
     # Добавляем пользователя
+    logger.info(f"Попытка добавить пользователя '{username}'")
     success, message = add_authorized_user(username)
     
     if success:
+        logger.info(f"Пользователь '{username}' успешно добавлен")
         await update.message.reply_text(
             f"✅ {message}\n\n"
             f"👤 Имя: {username}\n"
@@ -934,6 +936,7 @@ async def admin_username_input(update: Update, context: ContextTypes.DEFAULT_TYP
             reply_markup=get_admin_menu_keyboard()
         )
     else:
+        logger.error(f"Ошибка при добавлении пользователя '{username}': {message}")
         await update.message.reply_text(
             f"❌ {message}\n\n"
             "Попробуйте другое имя:",
@@ -998,12 +1001,14 @@ async def auth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if len(input_text) >= 2:
             # Это имя пользователя, проверяем, есть ли оно в списке авторизованных
             if is_username_authorized(input_text):
+                logger.info(f"Пользователь {user_id} авторизован по имени '{input_text}'")
                 # Обновляем telegram_id для этого пользователя
                 users_data = load_authorized_users()
                 for user in users_data.get("users", []):
                     if user.get("username") == input_text:
                         user["telegram_id"] = user_id
                         save_authorized_users(users_data)
+                        logger.info(f"Обновлен telegram_id для пользователя '{input_text}': {user_id}")
                         break
                 
                 await update.message.reply_text(
@@ -1049,15 +1054,23 @@ async def auth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         success, message, invitation_code = create_group(group_name, user_id)
         
         if success:
-            await update.message.reply_text(
-                f"✅ {message}\n\n"
-                f"🎯 Название группы: {group_name}\n"
-                f"🔑 Код приглашения: {invitation_code}\n\n"
-                "📱 Отправьте этот код членам семьи для присоединения к группе.\n\n"
-                "Теперь у вас есть доступ к боту!",
-                reply_markup=get_main_menu_keyboard()
-            )
-            context.user_data.pop('auth_state', None)
+            # Проверяем, что пользователь теперь в группе
+            if is_user_in_group(user_id):
+                await update.message.reply_text(
+                    f"✅ {message}\n\n"
+                    f"🎯 Название группы: {group_name}\n"
+                    f"🔑 Код приглашения: {invitation_code}\n\n"
+                    "📱 Отправьте этот код членам семьи для присоединения к группе.\n\n"
+                    "Теперь у вас есть доступ к боту!",
+                    reply_markup=get_main_menu_keyboard()
+                )
+                context.user_data.pop('auth_state', None)
+            else:
+                await update.message.reply_text(
+                    "❌ Группа создана, но возникла ошибка при добавлении вас как участника.\n\n"
+                    "Обратитесь к администратору.",
+                    reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
+                )
         else:
             await update.message.reply_text(
                 f"❌ {message}\n\n"
@@ -3497,6 +3510,7 @@ def save_authorized_users(users_data):
     try:
         with open(USERS_FILE, 'w', encoding='utf-8') as f:
             json.dump(users_data, f, ensure_ascii=False, indent=2)
+        logger.info(f"Пользователи успешно сохранены в файл {USERS_FILE}")
         return True
     except Exception as e:
         logger.error(f"Ошибка при сохранении пользователей: {e}")
@@ -3550,9 +3564,13 @@ def add_authorized_user(username: str, user_id: int = None) -> tuple[bool, str]:
         
         users_data["users"].append(new_user)
         
+        logger.info(f"Добавлен новый пользователь: {new_user}")
+        
         if save_authorized_users(users_data):
+            logger.info(f"Пользователь '{username}' успешно сохранен")
             return True, "Пользователь успешно добавлен"
         else:
+            logger.error(f"Ошибка при сохранении пользователя '{username}'")
             return False, "Ошибка при сохранении"
             
     except Exception as e:
@@ -3597,6 +3615,8 @@ def create_group(name: str, admin_user_id: int) -> tuple[bool, str, str]:
         conn.commit()
         conn.close()
         
+        logger.info(f"Группа '{name}' создана с ID {group_id}, пользователь {admin_user_id} добавлен как админ")
+        
         return True, f"Группа '{name}' успешно создана", invitation_code
         
     except Exception as e:
@@ -3625,13 +3645,17 @@ def get_user_group(user_id: int) -> dict:
         conn.close()
         
         if result:
-            return {
+            group_info = {
                 "id": result[0],
                 "name": result[1],
                 "admin_user_id": result[2],
                 "invitation_code": result[3],
                 "role": result[4]
             }
+            logger.info(f"Найдена группа для пользователя {user_id}: {group_info}")
+            return group_info
+        
+        logger.info(f"Группа для пользователя {user_id} не найдена")
         return None
         
     except Exception as e:
@@ -3649,7 +3673,7 @@ def join_group_by_invitation(invitation_code: str, user_id: int, phone: str) -> 
         
         # Проверяем код приглашения
         cursor.execute('''
-            SELECT id, name, max_members
+            SELECT id, name
             FROM groups
             WHERE invitation_code = %s
         ''', (invitation_code,))
@@ -3658,16 +3682,16 @@ def join_group_by_invitation(invitation_code: str, user_id: int, phone: str) -> 
         if not group_info:
             return False, "Неверный код приглашения"
         
-        group_id, group_name, max_members = group_info
+        group_id, group_name = group_info
         
-        # Проверяем количество участников
+        # Проверяем количество участников (максимум 5)
         cursor.execute('''
             SELECT COUNT(*) FROM group_members WHERE group_id = %s
         ''', (group_id,))
         
         current_members = cursor.fetchone()[0]
-        if current_members >= max_members:
-            return False, f"Группа '{group_name}' уже заполнена (максимум {max_members} участников)"
+        if current_members >= 5:
+            return False, f"Группа '{group_name}' уже заполнена (максимум 5 участников)"
         
         # Проверяем, не является ли пользователь уже участником
         cursor.execute('''
@@ -3698,7 +3722,9 @@ def join_group_by_invitation(invitation_code: str, user_id: int, phone: str) -> 
 
 def is_user_in_group(user_id: int) -> bool:
     """Проверяет, находится ли пользователь в какой-либо группе"""
-    return get_user_group(user_id) is not None
+    result = get_user_group(user_id) is not None
+    logger.info(f"Пользователь {user_id} в группе: {result}")
+    return result
 
 def get_group_members(group_id: int) -> list:
     """Получает список участников группы"""
