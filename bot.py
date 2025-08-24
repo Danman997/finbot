@@ -12,6 +12,17 @@ import re
 import schedule
 import time
 
+# Настройки matplotlib для высокого качества
+plt.rcParams['figure.dpi'] = 300
+plt.rcParams['savefig.dpi'] = 300
+plt.rcParams['font.size'] = 12
+plt.rcParams['axes.titlesize'] = 14
+plt.rcParams['axes.labelsize'] = 12
+plt.rcParams['xtick.labelsize'] = 10
+plt.rcParams['ytick.labelsize'] = 10
+plt.rcParams['legend.fontsize'] = 10
+plt.rcParams['figure.titlesize'] = 16
+
 # --- Логирование ---
 log_directory = os.path.join(os.path.dirname(__file__), 'logs')
 os.makedirs(log_directory, exist_ok=True)
@@ -1299,29 +1310,30 @@ def create_today_report(df, grouped_by_category, categories, amounts, total):
     fig.patch.set_facecolor('#1a1a1a')
     
     # Цветовая палитра
-    colors = ['#00ff88', '#00d4ff', '#ff6b6b', '#4ecdc4', '#45b7d1', '#96ceb4', '#feca57', '#ff9ff3', '#54a0ff', '#5f27cd']
+    colors = ['#6B8E23', '#4682B4', '#CD853F', '#20B2AA', '#8A2BE2', '#32CD32', '#FF8C00', '#DC143C', '#1E90FF', '#9370DB']
     
     # Создаем красивый пирог
     wedges, texts, autotexts = ax.pie(amounts, labels=categories, autopct='%1.1f%%', 
                                       startangle=90, colors=colors[:len(amounts)],
-                                      textprops={'fontsize': 12, 'fontweight': 'bold', 'color': 'white'})
+                                      textprops={'fontsize': 14, 'fontweight': 'bold', 'color': 'white'},
+                                      shadow=True, explode=[0.05] * len(amounts))
     
     # Настройка процентов
     for autotext in autotexts:
         autotext.set_color('white')
         autotext.set_fontweight('bold')
-        autotext.set_fontsize(11)
+        autotext.set_fontsize(13)
     
     # Центральный текст
     ax.text(0, 0, f'ОБЩИЕ\nРАСХОДЫ\n{total:.0f} Тг', ha='center', va='center', 
-            fontsize=18, fontweight='bold', color='white')
+            fontsize=20, fontweight='bold', color='white')
     
-    ax.set_title('РАСХОДЫ ЗА СЕГОДНЯ', color='white', fontsize=20, fontweight='bold', pad=30)
+    ax.set_title('РАСХОДЫ ЗА СЕГОДНЯ', color='white', fontsize=22, fontweight='bold', pad=30)
     
     # Легенда справа
     legend_labels = [f"{cat} — {amt:.0f} Тг" for cat, amt in zip(categories, amounts)]
     ax.legend(wedges, legend_labels, title="Категории", loc="center left", 
-             bbox_to_anchor=(1.1, 0.5), fontsize=11, title_fontsize=13)
+             bbox_to_anchor=(1.1, 0.5), fontsize=13, title_fontsize=15)
     
     return fig
 
@@ -1331,23 +1343,25 @@ def create_week_report(df, grouped_by_category, categories, amounts, total):
     fig.patch.set_facecolor('#1a1a1a')
     
     # Цветовая палитра
-    colors = ['#00ff88', '#00d4ff', '#ff6b6b', '#4ecdc4', '#45b7d1', '#96ceb4', '#feca57', '#ff9ff3', '#54a0ff', '#5f27cd']
+    colors = ['#6B8E23', '#4682B4', '#CD853F', '#20B2AA', '#8A2BE2', '#32CD32', '#FF8C00', '#DC143C', '#1E90FF', '#9370DB']
     
     # 1. Пирог категорий (левая часть)
     ax1 = fig.add_subplot(1, 2, 1)
     wedges, texts, autotexts = ax1.pie(amounts, labels=None, autopct='%1.1f%%', 
-                                       startangle=90, colors=colors[:len(amounts)])
+                                       startangle=90, colors=colors[:len(amounts)],
+                                       shadow=True, explode=[0.05] * len(amounts))
     
     # Настройка процентов
     for autotext in autotexts:
         autotext.set_color('white')
         autotext.set_fontweight('bold')
+        autotext.set_fontsize(13)
     
     # Центральный текст
     ax1.text(0, 0, f'ОБЩИЕ\nРАСХОДЫ\n{total:.0f} Тг', ha='center', va='center', 
-            fontsize=16, fontweight='bold', color='white')
+            fontsize=18, fontweight='bold', color='white')
     
-    ax1.set_title('РАСХОДЫ ПО КАТЕГОРИЯМ', color='white', fontsize=16, fontweight='bold', pad=20)
+    ax1.set_title('РАСХОДЫ ПО КАТЕГОРИЯМ', color='white', fontsize=18, fontweight='bold', pad=20)
     
     # 2. Топ 5 категорий (правая часть)
     ax2 = fig.add_subplot(1, 2, 2)
@@ -1355,23 +1369,23 @@ def create_week_report(df, grouped_by_category, categories, amounts, total):
     top_amounts = amounts[:5]
     
     bars = ax2.barh(top_categories, top_amounts, color=colors[:5], alpha=0.8)
-    ax2.set_title('ТОП-5 КАТЕГОРИЙ', color='white', fontsize=16, fontweight='bold', pad=20)
-    ax2.set_xlabel('Сумма (Тг)', color='white', fontsize=12)
+    ax2.set_title('ТОП-5 КАТЕГОРИЙ', color='white', fontsize=18, fontweight='bold', pad=20)
+    ax2.set_xlabel('Сумма (Тг)', color='white', fontsize=14)
     ax2.tick_params(colors='white')
-    ax2.grid(True, alpha=0.3)
+    ax2.grid(True, alpha=0.2, linestyle='--', linewidth=0.5)
     
     # Добавляем значения на столбцы
     for bar, amount in zip(bars, top_amounts):
         width = bar.get_width()
         ax2.text(width + max(top_amounts)*0.01, bar.get_y() + bar.get_height()/2.,
-                 f'{amount:.0f}', ha='left', va='center', color='white', fontweight='bold')
+                 f'{amount:.0f}', ha='left', va='center', color='white', fontweight='bold', fontsize=12)
     
     # Легенда для пирога
     legend_labels = [f"{cat} — {amt:.0f} Тг" for cat, amt in zip(categories, amounts)]
     ax1.legend(wedges, legend_labels, title="Категории", loc="upper left", 
-              bbox_to_anchor=(-0.1, 1.0), fontsize=10, title_fontsize=12)
+              bbox_to_anchor=(-0.1, 1.0), fontsize=12, title_fontsize=14)
     
-    fig.suptitle('ОТЧЕТ ЗА НЕДЕЛЮ', color='white', fontsize=20, fontweight='bold', y=0.95)
+    fig.suptitle('ОТЧЕТ ЗА НЕДЕЛЮ', color='white', fontsize=22, fontweight='bold', y=0.95)
     
     return fig
 
@@ -1381,21 +1395,23 @@ def create_month_report(df, grouped_by_category, grouped_by_week, categories, am
     fig.patch.set_facecolor('#1a1a1a')
     
     # Цветовая палитра
-    colors = ['#00ff88', '#00d4ff', '#ff6b6b', '#4ecdc4', '#45b7d1', '#96ceb4', '#feca57', '#ff9ff3', '#54a0ff', '#5f27cd']
+    colors = ['#6B8E23', '#4682B4', '#CD853F', '#20B2AA', '#8A2BE2', '#32CD32', '#FF8C00', '#DC143C', '#1E90FF', '#9370DB']
     
     # 1. Пирог категорий (верхний левый)
     ax1 = fig.add_subplot(2, 2, 1)
     wedges, texts, autotexts = ax1.pie(amounts, labels=None, autopct='%1.1f%%', 
-                                       startangle=90, colors=colors[:len(amounts)])
+                                       startangle=90, colors=colors[:len(amounts)],
+                                       shadow=True, explode=[0.05] * len(amounts))
     
     for autotext in autotexts:
         autotext.set_color('white')
         autotext.set_fontweight('bold')
+        autotext.set_fontsize(13)
     
     ax1.text(0, 0, f'ОБЩИЕ\nРАСХОДЫ\n{total:.0f} Тг', ha='center', va='center', 
-            fontsize=14, fontweight='bold', color='white')
+            fontsize=16, fontweight='bold', color='white')
     
-    ax1.set_title('РАСХОДЫ ПО КАТЕГОРИЯМ', color='white', fontsize=14, fontweight='bold', pad=20)
+    ax1.set_title('РАСХОДЫ ПО КАТЕГОРИЯМ', color='white', fontsize=16, fontweight='bold', pad=20)
     
     # 2. Топ 5 категорий (верхний правый)
     ax2 = fig.add_subplot(2, 2, 2)
@@ -1403,15 +1419,15 @@ def create_month_report(df, grouped_by_category, grouped_by_week, categories, am
     top_amounts = amounts[:5]
     
     bars = ax2.barh(top_categories, top_amounts, color=colors[:5], alpha=0.8)
-    ax2.set_title('ТОП-5 КАТЕГОРИЙ', color='white', fontsize=14, fontweight='bold', pad=20)
-    ax2.set_xlabel('Сумма (Тг)', color='white', fontsize=12)
+    ax2.set_title('ТОП-5 КАТЕГОРИЙ', color='white', fontsize=16, fontweight='bold', pad=20)
+    ax2.set_xlabel('Сумма (Тг)', color='white', fontsize=14)
     ax2.tick_params(colors='white')
-    ax2.grid(True, alpha=0.3)
+    ax2.grid(True, alpha=0.2, linestyle='--', linewidth=0.5)
     
     for bar, amount in zip(bars, top_amounts):
         width = bar.get_width()
         ax2.text(width + max(top_amounts)*0.01, bar.get_y() + bar.get_height()/2.,
-                 f'{amount:.0f}', ha='left', va='center', color='white', fontweight='bold')
+                 f'{amount:.0f}', ha='left', va='center', color='white', fontweight='bold', fontsize=12)
     
     # 3. Сравнение недель (нижний ряд)
     ax3 = fig.add_subplot(2, 2, (3, 4))
@@ -1419,24 +1435,24 @@ def create_month_report(df, grouped_by_category, grouped_by_week, categories, am
     week_amounts = grouped_by_week['Сумма'].tolist()
     
     bars = ax3.bar(weeks, week_amounts, color=colors[:len(weeks)], alpha=0.8)
-    ax3.set_title('СРАВНЕНИЕ НЕДЕЛЬ', color='white', fontsize=16, fontweight='bold', pad=20)
-    ax3.set_ylabel('Сумма (Тг)', color='white', fontsize=12)
-    ax3.set_xlabel('Номер недели', color='white', fontsize=12)
+    ax3.set_title('СРАВНЕНИЕ НЕДЕЛЬ', color='white', fontsize=18, fontweight='bold', pad=20)
+    ax3.set_ylabel('Сумма (Тг)', color='white', fontsize=14)
+    ax3.set_xlabel('Номер недели', color='white', fontsize=14)
     ax3.tick_params(colors='white')
-    ax3.grid(True, alpha=0.3)
+    ax3.grid(True, alpha=0.2, linestyle='--', linewidth=0.5)
     
     # Добавляем значения на столбцы
     for bar, amount in zip(bars, week_amounts):
         height = bar.get_height()
         ax3.text(bar.get_x() + bar.get_width()/2., height + max(week_amounts)*0.01,
-                 f'{amount:.0f}', ha='center', va='bottom', color='white', fontweight='bold')
+                 f'{amount:.0f}', ha='center', va='bottom', color='white', fontweight='bold', fontsize=12)
     
     # Легенда для пирога
     legend_labels = [f"{cat} — {amt:.0f} Тг" for cat, amt in zip(categories, amounts)]
     ax1.legend(wedges, legend_labels, title="Категории", loc="upper left", 
-              bbox_to_anchor=(-0.1, 1.0), fontsize=9, title_fontsize=11)
+              bbox_to_anchor=(-0.1, 1.0), fontsize=11, title_fontsize=13)
     
-    fig.suptitle('ОТЧЕТ ЗА МЕСЯЦ', color='white', fontsize=20, fontweight='bold', y=0.95)
+    fig.suptitle('ОТЧЕТ ЗА МЕСЯЦ', color='white', fontsize=22, fontweight='bold', y=0.95)
     
     return fig
 
@@ -1446,21 +1462,23 @@ def create_year_report(df, grouped_by_category, grouped_by_month, categories, am
     fig.patch.set_facecolor('#1a1a1a')
     
     # Цветовая палитра
-    colors = ['#00ff88', '#00d4ff', '#ff6b6b', '#4ecdc4', '#45b7d1', '#96ceb4', '#feca57', '#ff9ff3', '#54a0ff', '#5f27cd']
+    colors = ['#6B8E23', '#4682B4', '#CD853F', '#20B2AA', '#8A2BE2', '#32CD32', '#FF8C00', '#DC143C', '#1E90FF', '#9370DB']
     
     # 1. Пирог категорий (верхний левый)
     ax1 = fig.add_subplot(2, 2, 1)
     wedges, texts, autotexts = ax1.pie(amounts, labels=None, autopct='%1.1f%%', 
-                                       startangle=90, colors=colors[:len(amounts)])
+                                       startangle=90, colors=colors[:len(amounts)],
+                                       shadow=True, explode=[0.05] * len(amounts))
     
     for autotext in autotexts:
         autotext.set_color('white')
         autotext.set_fontweight('bold')
+        autotext.set_fontsize(13)
     
     ax1.text(0, 0, f'ОБЩИЕ\nРАСХОДЫ\n{total:.0f} Тг', ha='center', va='center', 
-            fontsize=14, fontweight='bold', color='white')
+            fontsize=16, fontweight='bold', color='white')
     
-    ax1.set_title('РАСХОДЫ ПО КАТЕГОРИЯМ', color='white', fontsize=14, fontweight='bold', pad=20)
+    ax1.set_title('РАСХОДЫ ПО КАТЕГОРИЯМ', color='white', fontsize=16, fontweight='bold', pad=20)
     
     # 2. Топ 5 категорий (верхний правый)
     ax2 = fig.add_subplot(2, 2, 2)
@@ -1468,15 +1486,15 @@ def create_year_report(df, grouped_by_category, grouped_by_month, categories, am
     top_amounts = amounts[:5]
     
     bars = ax2.barh(top_categories, top_amounts, color=colors[:5], alpha=0.8)
-    ax2.set_title('ТОП-5 КАТЕГОРИЙ', color='white', fontsize=14, fontweight='bold', pad=20)
-    ax2.set_xlabel('Сумма (Тг)', color='white', fontsize=12)
+    ax2.set_title('ТОП-5 КАТЕГОРИЙ', color='white', fontsize=16, fontweight='bold', pad=20)
+    ax2.set_xlabel('Сумма (Тг)', color='white', fontsize=14)
     ax2.tick_params(colors='white')
-    ax2.grid(True, alpha=0.3)
+    ax2.grid(True, alpha=0.2, linestyle='--', linewidth=0.5)
     
     for bar, amount in zip(bars, top_amounts):
         width = bar.get_width()
         ax2.text(width + max(top_amounts)*0.01, bar.get_y() + bar.get_height()/2.,
-                 f'{amount:.0f}', ha='left', va='center', color='white', fontweight='bold')
+                 f'{amount:.0f}', ha='left', va='center', color='white', fontweight='bold', fontsize=12)
     
     # 3. Сравнение месяцев (нижний ряд)
     ax3 = fig.add_subplot(2, 2, (3, 4))
@@ -1484,24 +1502,24 @@ def create_year_report(df, grouped_by_category, grouped_by_month, categories, am
     month_amounts = grouped_by_month['Сумма'].tolist()
     
     bars = ax3.bar(months, month_amounts, color=colors[:len(months)], alpha=0.8)
-    ax3.set_title('СРАВНЕНИЕ МЕСЯЦЕВ', color='white', fontsize=16, fontweight='bold', pad=20)
-    ax3.set_ylabel('Сумма (Тг)', color='white', fontsize=12)
-    ax3.set_xlabel('Месяц', color='white', fontsize=12)
+    ax3.set_title('СРАВНЕНИЕ МЕСЯЦЕВ', color='white', fontsize=18, fontweight='bold', pad=20)
+    ax3.set_ylabel('Сумма (Тг)', color='white', fontsize=14)
+    ax3.set_xlabel('Месяц', color='white', fontsize=14)
     ax3.tick_params(colors='white')
-    ax3.grid(True, alpha=0.3)
+    ax3.grid(True, alpha=0.2, linestyle='--', linewidth=0.5)
     
     # Добавляем значения на столбцы
     for bar, amount in zip(bars, month_amounts):
         height = bar.get_height()
         ax3.text(bar.get_x() + bar.get_width()/2., height + max(month_amounts)*0.01,
-                 f'{amount:.0f}', ha='center', va='bottom', color='white', fontweight='bold')
+                 f'{amount:.0f}', ha='center', va='bottom', color='white', fontweight='bold', fontsize=12)
     
     # Легенда для пирога
     legend_labels = [f"{cat} — {amt:.0f} Тг" for cat, amt in zip(categories, amounts)]
     ax1.legend(wedges, legend_labels, title="Категории", loc="upper left", 
-              bbox_to_anchor=(-0.1, 1.0), fontsize=9, title_fontsize=11)
+              bbox_to_anchor=(-0.1, 1.0), fontsize=11, title_fontsize=13)
     
-    fig.suptitle('ОТЧЕТ ЗА ГОД', color='white', fontsize=20, fontweight='bold', y=0.95)
+    fig.suptitle('ОТЧЕТ ЗА ГОД', color='white', fontsize=22, fontweight='bold', y=0.95)
     
     return fig
 
