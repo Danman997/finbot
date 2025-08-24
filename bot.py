@@ -814,12 +814,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(
             "🔐 Добро пожаловать!\n\n"
             "Для доступа к боту необходимо:\n"
-            "1️⃣ Ввести номер телефона (если вы уже в списке авторизованных)\n"
+            "1️⃣ Ввести ваше имя (если вы уже в списке авторизованных)\n"
             "2️⃣ Или ввести код приглашения в группу\n\n"
-            "📱 Введите номер телефона или код приглашения:",
+            "👤 Введите ваше имя или код приглашения:",
             reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
         )
-        context.user_data['auth_state'] = 'waiting_for_phone_or_code'
+        context.user_data['auth_state'] = 'waiting_for_username_or_code'
         return
     
     # Проверяем, находится ли пользователь в группе
@@ -856,9 +856,9 @@ async def admin_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     if text == "👥 Добавить пользователя":
         await update.message.reply_text(
-            "📱 Введите номер телефона нового пользователя в формате:\n\n"
-            "+7XXXXXXXXXX или 8XXXXXXXXXX\n\n"
-            "Например: +77001234567",
+            "👤 Введите имя нового пользователя:\n\n"
+            "Например: Иван Петров, Мария Сидорова\n\n"
+            "⚠️ Имя должно быть уникальным и не повторяться",
             reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
         )
         context.user_data['admin_action'] = 'add_user'
@@ -875,12 +875,12 @@ async def admin_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         users_text = "📋 Список авторизованных пользователей:\n\n"
         for i, user in enumerate(users, 1):
-            phone = user.get("phone", "Не указан")
+            username = user.get("username", "Не указано")
             added_date = user.get("added_date", "Не указана")
             status = user.get("status", "Неизвестен")
             telegram_id = user.get("telegram_id", "Не привязан")
             
-            users_text += f"{i}. 📱 {phone}\n"
+            users_text += f"{i}. 👤 {username}\n"
             users_text += f"   🆔 Telegram ID: {telegram_id}\n"
             users_text += f"   📅 Добавлен: {added_date[:10]}\n"
             users_text += f"   ✅ Статус: {status}\n\n"
@@ -899,27 +899,27 @@ async def admin_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
     
     else:
-        # Обработка ввода номера телефона
+        # Обработка ввода имени пользователя
         if context.user_data.get('admin_action') == 'add_user':
-            phone = text.strip()
+            username = text.strip()
             
-            # Проверяем формат номера телефона
-            if not re.match(r'^(\+7|8)\d{10}$', phone):
+            # Проверяем, что имя не пустое и содержит только буквы, цифры и пробелы
+            if not username or len(username) < 2:
                 await update.message.reply_text(
-                    "❌ Неверный формат номера телефона.\n\n"
-                    "Используйте формат: +77001234567 или 87001234567",
+                    "❌ Имя пользователя должно содержать минимум 2 символа.",
                     reply_markup=get_admin_menu_keyboard()
                 )
                 context.user_data.pop('admin_action', None)
                 return
             
             # Добавляем пользователя
-            success, message = add_authorized_user(phone)
+            success, message = add_authorized_user(username)
             
             if success:
                 await update.message.reply_text(
                     f"✅ {message}\n\n"
-                    f"Номер телефона: {phone}\n\n"
+                    f"👤 Имя: {username}\n"
+                    f"📅 Дата регистрации: {datetime.now().strftime('%d.%m.%Y')}\n\n"
                     "Пользователь может теперь запустить бота командой /start",
                     reply_markup=get_admin_menu_keyboard()
                 )
@@ -953,8 +953,8 @@ async def auth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     
     auth_state = context.user_data.get('auth_state')
     
-    if auth_state == 'waiting_for_phone_or_code':
-        # Пользователь ввел номер телефона или код приглашения
+    if auth_state == 'waiting_for_username_or_code':
+        # Пользователь ввел имя пользователя или код приглашения
         input_text = text.strip()
         
         # Проверяем, является ли это кодом приглашения (8 символов, буквы и цифры)
@@ -975,28 +975,25 @@ async def auth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             else:
                 await update.message.reply_text(
                     f"❌ {message}\n\n"
-                    "Попробуйте еще раз или введите номер телефона:",
+                    "Попробуйте еще раз или введите ваше имя:",
                     reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
                 )
                 return
         
-        # Проверяем, является ли это номером телефона
-        if re.match(r'^(\+7|8)\d{10}$', input_text):
-            # Это номер телефона, проверяем, есть ли он в списке авторизованных
-            users_data = load_authorized_users()
-            phone_found = False
-            
-            for user in users_data.get("users", []):
-                if user.get("phone") == input_text:
-                    phone_found = True
-                    # Обновляем telegram_id для этого пользователя
-                    user["telegram_id"] = user_id
-                    save_authorized_users(users_data)
-                    break
-            
-            if phone_found:
+        # Проверяем, является ли это именем пользователя
+        if len(input_text) >= 2:
+            # Это имя пользователя, проверяем, есть ли оно в списке авторизованных
+            if is_username_authorized(input_text):
+                # Обновляем telegram_id для этого пользователя
+                users_data = load_authorized_users()
+                for user in users_data.get("users", []):
+                    if user.get("username") == input_text:
+                        user["telegram_id"] = user_id
+                        save_authorized_users(users_data)
+                        break
+                
                 await update.message.reply_text(
-                    "✅ Номер телефона найден!\n\n"
+                    "✅ Ваше имя найдено в списке авторизованных пользователей!\n\n"
                     "Теперь необходимо создать или присоединиться к группе.\n\n"
                     "📝 Введите название вашей группы (например: 'Семья Ивановых'):",
                     reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
@@ -1005,7 +1002,7 @@ async def auth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 return
             else:
                 await update.message.reply_text(
-                    "❌ Номер телефона не найден в списке авторизованных пользователей.\n\n"
+                    "❌ Ваше имя не найдено в списке авторизованных пользователей.\n\n"
                     "Попробуйте ввести код приглашения или обратитесь к администратору:",
                     reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
                 )
@@ -1015,7 +1012,7 @@ async def auth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text(
             "❌ Неверный формат.\n\n"
             "Введите:\n"
-            "• Номер телефона в формате +77001234567 или 87001234567\n"
+            "• Ваше имя (минимум 2 символа)\n"
             "• Или код приглашения (8 символов)\n\n"
             "Попробуйте еще раз:",
             reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
@@ -3495,19 +3492,30 @@ def is_user_authorized(user_id: int) -> bool:
     
     return False
 
-def add_authorized_user(phone: str, user_id: int = None) -> tuple[bool, str]:
+def is_username_authorized(username: str) -> bool:
+    """Проверяет, авторизован ли пользователь по имени"""
+    users_data = load_authorized_users()
+    
+    # Проверяем, есть ли пользователь с таким именем в списке авторизованных
+    for user in users_data.get("users", []):
+        if user.get("username") == username:
+            return True
+    
+    return False
+
+def add_authorized_user(username: str, user_id: int = None) -> tuple[bool, str]:
     """Добавляет нового авторизованного пользователя"""
     try:
         users_data = load_authorized_users()
         
-        # Проверяем, не существует ли уже пользователь с таким телефоном
+        # Проверяем, не существует ли уже пользователь с таким именем
         for user in users_data.get("users", []):
-            if user.get("phone") == phone:
-                return False, "Пользователь с таким телефоном уже существует"
+            if user.get("username") == username:
+                return False, "Пользователь с таким именем уже существует"
         
         # Добавляем нового пользователя
         new_user = {
-            "phone": phone,
+            "username": username,
             "added_date": datetime.now().isoformat(),
             "status": "active"
         }
