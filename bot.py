@@ -1710,9 +1710,8 @@ async def analytics_month_choice(update: Update, context: ContextTypes.DEFAULT_T
         
         # Формируем список месяцев
         keyboard = []
-        for month, year in months:
-            month_name = get_month_name(month)
-            keyboard.append([KeyboardButton(f"{month_name} {year}")])
+        for month_text in months:
+            keyboard.append([KeyboardButton(month_text)])
         
         keyboard.append([KeyboardButton("🔙 Назад")])
         reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
