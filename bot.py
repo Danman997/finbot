@@ -861,8 +861,7 @@ async def admin_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "⚠️ Имя должно быть уникальным и не повторяться",
             reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
         )
-        context.user_data['admin_action'] = 'add_user'
-        return
+        return 'waiting_for_username'
     
     elif text == "📋 Список пользователей":
         users = get_authorized_users_list()
@@ -897,45 +896,60 @@ async def admin_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             reply_markup=get_main_menu_keyboard()
         )
         return
+
+async def admin_username_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Обработчик ввода имени пользователя для добавления"""
+    user_id = update.effective_user.id
+    text = update.message.text
     
-    else:
-        # Обработка ввода имени пользователя
-        if context.user_data.get('admin_action') == 'add_user':
-            username = text.strip()
-            
-            # Проверяем, что имя не пустое и содержит только буквы, цифры и пробелы
-            if not username or len(username) < 2:
-                await update.message.reply_text(
-                    "❌ Имя пользователя должно содержать минимум 2 символа.",
-                    reply_markup=get_admin_menu_keyboard()
-                )
-                context.user_data.pop('admin_action', None)
-                return
-            
-            # Добавляем пользователя
-            success, message = add_authorized_user(username)
-            
-            if success:
-                await update.message.reply_text(
-                    f"✅ {message}\n\n"
-                    f"👤 Имя: {username}\n"
-                    f"📅 Дата регистрации: {datetime.now().strftime('%d.%m.%Y')}\n\n"
-                    "Пользователь может теперь запустить бота командой /start",
-                    reply_markup=get_admin_menu_keyboard()
-                )
-            else:
-                await update.message.reply_text(
-                    f"❌ {message}",
-                    reply_markup=get_admin_menu_keyboard()
-                )
-            
-            context.user_data.pop('admin_action', None)
-            return
-        
+    # Проверяем, является ли пользователь администратором
+    users_data = load_authorized_users()
+    if user_id != users_data.get("admin"):
         await update.message.reply_text(
-            "❌ Неизвестная команда. Используйте кнопки меню.",
+            "❌ Доступ запрещен. Только администратор может использовать эту функцию.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+    
+    username = text.strip()
+    
+    # Проверяем, что имя не пустое и содержит только буквы, цифры и пробелы
+    if not username or len(username) < 2:
+        await update.message.reply_text(
+            "❌ Имя пользователя должно содержать минимум 2 символа.\n\n"
+            "Попробуйте еще раз:",
+            reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+        )
+        return 'waiting_for_username'
+    
+    # Добавляем пользователя
+    success, message = add_authorized_user(username)
+    
+    if success:
+        await update.message.reply_text(
+            f"✅ {message}\n\n"
+            f"👤 Имя: {username}\n"
+            f"📅 Дата регистрации: {datetime.now().strftime('%d.%m.%Y')}\n\n"
+            "Пользователь может теперь запустить бота командой /start",
             reply_markup=get_admin_menu_keyboard()
         )
+    else:
+        await update.message.reply_text(
+            f"❌ {message}\n\n"
+            "Попробуйте другое имя:",
+            reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+        )
+        return 'waiting_for_username'
+    
+    return ConversationHandler.END
+
+async def admin_back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Возврат в админское меню"""
+    await update.message.reply_text(
+        "Админ-меню:",
+        reply_markup=get_admin_menu_keyboard()
+    )
+    return ConversationHandler.END
 
 # --- ОБРАБОТЧИК АУТЕНТИФИКАЦИИ ---
 async def auth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2613,18 +2627,29 @@ def main():
         allow_reentry=True
     )
 
+    # Обработчик для админ-меню
+    admin_conv_handler = ConversationHandler(
+        entry_points=[
+            MessageHandler(filters.Regex("^(👥 Добавить пользователя|📋 Список пользователей|🔙 Главное меню)$"), 
+            admin_menu_handler)
+        ],
+        states={
+            'waiting_for_username': [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_username_input),
+                MessageHandler(filters.Regex("^🔙 Назад$"), admin_back_to_menu)
+            ]
+        },
+        fallbacks=[CommandHandler("start", start)],
+        allow_reentry=True
+    )
+
     application.add_handler(report_conv_handler)
     application.add_handler(correction_conv_handler)
     application.add_handler(reminder_conv_handler)
     application.add_handler(planning_conv_handler)
     application.add_handler(analytics_conv_handler)
+    application.add_handler(admin_conv_handler)
     application.add_handler(CommandHandler("start", start))
-    
-    # Обработчик для админ-меню (должен быть перед общим обработчиком сообщений)
-    application.add_handler(MessageHandler(
-        filters.Regex("^(👥 Добавить пользователя|📋 Список пользователей|🔙 Главное меню)$"), 
-        admin_menu_handler
-    ))
     
     # Обработчик для аутентификации (должен быть перед общим обработчиком сообщений)
     application.add_handler(MessageHandler(
