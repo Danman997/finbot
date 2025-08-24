@@ -820,7 +820,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
         )
         context.user_data['auth_state'] = 'waiting_for_username_or_code'
-        return
+        return 'waiting_for_username_or_code'
     
     # Проверяем, находится ли пользователь в группе
     if not is_user_in_group(user_id):
@@ -831,7 +831,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
         )
         context.user_data['auth_state'] = 'waiting_for_group_name'
-        return
+        return 'waiting_for_group_name'
     
     # Пользователь авторизован и в группе
     await update.message.reply_text(
@@ -966,7 +966,7 @@ async def auth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             reply_markup=ReplyKeyboardRemove()
         )
         context.user_data.pop('auth_state', None)
-        return
+        return ConversationHandler.END
     
     auth_state = context.user_data.get('auth_state')
     
@@ -988,14 +988,14 @@ async def auth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     reply_markup=get_main_menu_keyboard()
                 )
                 context.user_data.pop('auth_state', None)
-                return
+                return ConversationHandler.END
             else:
                 await update.message.reply_text(
                     f"❌ {message}\n\n"
                     "Попробуйте еще раз или введите ваше имя:",
                     reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
                 )
-                return
+                return 'waiting_for_username_or_code'
         
         # Проверяем, является ли это именем пользователя
         if len(input_text) >= 2:
@@ -1018,14 +1018,14 @@ async def auth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
                 )
                 context.user_data['auth_state'] = 'waiting_for_group_name'
-                return
+                return 'waiting_for_group_name'
             else:
                 await update.message.reply_text(
                     "❌ Ваше имя не найдено в списке авторизованных пользователей.\n\n"
                     "Попробуйте ввести код приглашения или обратитесь к администратору:",
                     reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
                 )
-                return
+                return 'waiting_for_username_or_code'
         
         # Неверный формат
         await update.message.reply_text(
@@ -1036,7 +1036,7 @@ async def auth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             "Попробуйте еще раз:",
             reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
         )
-        return
+        return 'waiting_for_username_or_code'
     
     elif auth_state == 'waiting_for_group_name':
         # Пользователь ввел название группы
@@ -1048,7 +1048,7 @@ async def auth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 "Попробуйте еще раз:",
                 reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
             )
-            return
+            return 'waiting_for_group_name'
         
         # Создаем группу
         success, message, invitation_code = create_group(group_name, user_id)
@@ -1065,19 +1065,21 @@ async def auth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     reply_markup=get_main_menu_keyboard()
                 )
                 context.user_data.pop('auth_state', None)
+                return ConversationHandler.END
             else:
                 await update.message.reply_text(
                     "❌ Группа создана, но возникла ошибка при добавлении вас как участника.\n\n"
                     "Обратитесь к администратору.",
                     reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
                 )
+                return 'waiting_for_group_name'
         else:
             await update.message.reply_text(
                 f"❌ {message}\n\n"
                 "Попробуйте другое название группы:",
                 reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
             )
-        return
+            return 'waiting_for_group_name'
 
 # --- УПРАВЛЕНИЕ ГРУППОЙ ---
 async def group_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2665,10 +2667,24 @@ def main():
     application.add_handler(CommandHandler("start", start))
     
     # Обработчик для аутентификации (должен быть перед общим обработчиком сообщений)
-    application.add_handler(MessageHandler(
-        filters.Regex("^(🔙 Отмена)$"), 
-        auth_handler
-    ))
+    auth_conv_handler = ConversationHandler(
+        entry_points=[
+            CommandHandler("start", start)
+        ],
+        states={
+            'waiting_for_username_or_code': [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, auth_handler)
+            ],
+            'waiting_for_group_name': [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, auth_handler),
+                MessageHandler(filters.Regex("^🔙 Отмена$"), auth_handler)
+            ]
+        },
+        fallbacks=[CommandHandler("start", start)],
+        allow_reentry=True
+    )
+    
+    application.add_handler(auth_conv_handler)
     
     # Обработчик для управления группой (должен быть перед общим обработчиком сообщений)
     application.add_handler(MessageHandler(
