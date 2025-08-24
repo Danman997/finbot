@@ -2263,7 +2263,7 @@ def main():
         states={
             PERIOD_CHOICE_STATE: [MessageHandler(filters.Regex("^(Сегодня|Неделя|Месяц|Год)$"), period_choice)],
         },
-        fallbacks=[MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)],
+        fallbacks=[CommandHandler("start", start)],
         allow_reentry=True
     )
     
@@ -2282,7 +2282,7 @@ def main():
             EXPENSE_DELETE_STATE: [MessageHandler(filters.Regex("^[0-9]+$"), expense_delete_choice)],
             EXPENSE_DELETE_CONFIRM_STATE: [MessageHandler(filters.Regex("^(✅ Да, удалить|❌ Отмена)$"), expense_delete_confirm)],
         },
-        fallbacks=[MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)],
+        fallbacks=[CommandHandler("start", start)],
         allow_reentry=True
     )
 
@@ -2305,7 +2305,7 @@ def main():
             REMINDER_MANAGE_STATE: [MessageHandler(filters.Regex("^(❌ Удалить \d+|🔙 Назад)$"), reminder_manage)],
             REMINDER_DELETE_STATE: [MessageHandler(filters.Regex("^(❌ Удалить \d+|🔙 Назад)$"), reminder_delete_confirm)],
         },
-        fallbacks=[MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)],
+        fallbacks=[CommandHandler("start", start)],
         allow_reentry=True
     )
     
@@ -2329,7 +2329,7 @@ def main():
             PLAN_DELETE_STATE: [MessageHandler(filters.Regex("^(❌ Удалить план \d+|🔙 Назад)$"), planning_delete_confirm)],
             CUSTOM_CATEGORY_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, custom_category_input)],
         },
-        fallbacks=[MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)],
+        fallbacks=[CommandHandler("start", start)],
         allow_reentry=True
     )
     
@@ -2348,7 +2348,7 @@ def main():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, analytics_month_selected)
             ],
         },
-        fallbacks=[MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)],
+        fallbacks=[CommandHandler("start", start)],
         allow_reentry=True
     )
 
