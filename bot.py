@@ -1680,70 +1680,65 @@ ANALYTICS_MONTH_STATE = 31
 ANALYTICS_REPORT_STATE = 32
 
 # --- Функции для аналитики ---
-async def analytics_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Меню аналитики"""
+async def analytics_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать меню аналитики"""
     keyboard = [
-        [KeyboardButton("📊 Анализ месяца")],
-        [KeyboardButton("📈 Сравнение планов")],
+        [KeyboardButton("📊 Сравнение с планом")],
         [KeyboardButton("🔙 Назад")]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
-    
     await update.message.reply_text(
-        "📈 Аналитика и финансовые рекомендации\n\n"
-        "📊 Анализ месяца - сравнение расходов с планированием\n"
-        "📈 Сравнение планов - анализ трендов и рекомендации\n"
-        "🔙 Назад - вернуться в главное меню",
+        "📊 Выберите действие:",
         reply_markup=reply_markup
     )
     return ANALYTICS_MENU_STATE
 
-async def analytics_month_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Выбор месяца для анализа"""
-    text = update.message.text.strip()
+async def analytics_month_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора в меню аналитики"""
+    text = update.message.text
     
-    if text == "📊 Анализ месяца":
-        # Показываем доступные месяцы для анализа
+    if text == "📊 Сравнение с планом":
+        # Получаем доступные месяцы для анализа
         months = get_available_months_for_analytics()
+        
         if not months:
             await update.message.reply_text(
-                "❌ Нет данных для анализа. Сначала создайте планирование и добавьте расходы.",
+                "❌ Нет данных для анализа. Сначала создайте план бюджета и добавьте расходы.",
                 reply_markup=get_main_menu_keyboard()
             )
             return ConversationHandler.END
         
+        # Формируем список месяцев
         keyboard = []
-        for month in months:
-            keyboard.append([KeyboardButton(month)])
-        keyboard.append([KeyboardButton("🔙 Назад")])
+        for month, year in months:
+            month_name = get_month_name(month)
+            keyboard.append([KeyboardButton(f"{month_name} {year}")])
         
+        keyboard.append([KeyboardButton("🔙 Назад")])
         reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
         
         await update.message.reply_text(
-            "📊 Выберите месяц для анализа:\n\n"
-            "Анализ покажет:\n"
-            "• Сравнение плана vs факт\n"
-            "• Превышения бюджета\n"
-            "• Рекомендации по экономии",
+            "📅 Выберите месяц для сравнения:",
             reply_markup=reply_markup
         )
         return ANALYTICS_MONTH_STATE
-        
-    elif text == "📈 Сравнение планов":
-        await generate_comparison_analytics(update, context)
-        return ConversationHandler.END
-        
+    
     elif text == "🔙 Назад":
         await update.message.reply_text(
-            "Возвращаемся в главное меню",
+            "Главное меню:",
             reply_markup=get_main_menu_keyboard()
         )
         return ConversationHandler.END
     
-    return ANALYTICS_MENU_STATE
+    else:
+        await update.message.reply_text(
+            "❌ Неверный выбор. Используйте кнопки меню.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
 
-async def analytics_month_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обработка выбранного месяца для анализа"""
+async def analytics_month_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора месяца для анализа"""
     text = update.message.text.strip()
     
     if text == "🔙 Назад":
@@ -1751,16 +1746,17 @@ async def analytics_month_selected(update: Update, context: ContextTypes.DEFAULT
         return ANALYTICS_MENU_STATE
     
     # Парсим месяц и год
-    try:
-        month, year = parse_month_year(text)
-        await generate_monthly_analytics(update, context, month, year)
-        return ConversationHandler.END
-    except ValueError:
+    month, year = parse_month_year(text)
+    if not month or not year:
         await update.message.reply_text(
-            "❌ Неверный формат месяца. Попробуйте снова.",
+            "❌ Неверный формат месяца. Используйте формат: 'Август 2025'",
             reply_markup=get_main_menu_keyboard()
         )
         return ConversationHandler.END
+    
+    # Генерируем простое сравнение
+    await generate_simple_comparison(update, context, month, year)
+    return ConversationHandler.END
 
 def get_available_months_for_analytics():
     """Получить доступные месяцы для анализа (где есть и план и расходы)"""
@@ -1821,433 +1817,75 @@ def parse_month_year(month_text):
     
     raise ValueError("Неверный формат месяца")
 
-async def generate_monthly_analytics(update: Update, context: ContextTypes.DEFAULT_TYPE, month: int, year: int):
-    """Генерация аналитики за месяц"""
+async def generate_simple_comparison(update: Update, context: ContextTypes.DEFAULT_TYPE, month: int, year: int):
+    """Простое сравнение планов и расходов по категориям"""
     try:
-        # Получаем план на месяц
-        plan = get_budget_plan_by_month(month, year)
-        if not plan:
+        # Получаем план бюджета
+        plan_data = get_budget_plan_by_month(month, year)
+        if not plan_data:
             await update.message.reply_text(
-                "❌ План на выбранный месяц не найден.",
+                f"❌ План бюджета на {get_month_name(month)} {year} не найден.",
                 reply_markup=get_main_menu_keyboard()
             )
             return
         
-        plan_id, total_budget = plan
+        plan_id, total_budget = plan_data
         
-        # Получаем фактические расходы за месяц
-        expenses = get_monthly_expenses(month, year)
-        
-        # Получаем детали плана
+        # Получаем детали плана по категориям
         plan_items = get_budget_plan_items(plan_id)
+        plan_dict = {item[0]: item[1] for item in plan_items}  # категория: сумма
         
-        # Анализируем данные
-        analysis_result = analyze_monthly_data(plan_items, expenses, total_budget)
+        # Получаем расходы за месяц
+        expenses = get_monthly_expenses(month, year)
+        expense_dict = {item[0]: item[1] for item in expenses}  # категория: сумма
         
-        # Генерируем график сравнения
-        fig = create_analytics_chart(plan_items, expenses, total_budget)
+        # Получаем все уникальные категории
+        all_categories = set(plan_dict.keys()) | set(expense_dict.keys())
         
-        # Отправляем результат
-        await update.message.reply_photo(
-            photo=fig,
-            caption=analysis_result,
-            reply_markup=get_main_menu_keyboard()
-        )
+        # Формируем отчет
+        report = f"📊 Сравнение планов и расходов за {get_month_name(month)} {year}\n\n"
+        report += f"💰 Общий бюджет: {total_budget:,.0f} ₸\n\n"
         
-        plt.close(fig)
+        total_planned = sum(plan_dict.values())
+        total_spent = sum(expense_dict.values())
         
-    except Exception as e:
-        logger.error(f"Ошибка при генерации аналитики: {e}")
-        await update.message.reply_text(
-            f"❌ Ошибка при генерации аналитики: {e}",
-            reply_markup=get_main_menu_keyboard()
-        )
-
-async def generate_comparison_analytics(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Генерация сравнительной аналитики"""
-    try:
-        # Получаем данные для сравнения
-        comparison_data = get_comparison_data()
+        report += f"📋 Планируемые расходы: {total_planned:,.0f} ₸\n"
+        report += f"💸 Фактические расходы: {total_spent:,.0f} ₸\n"
         
-        if not comparison_data:
-            await update.message.reply_text(
-                "❌ Недостаточно данных для сравнения. Нужны данные за несколько месяцев.",
-                reply_markup=get_main_menu_keyboard()
-            )
-            return
-        
-        # Генерируем график сравнения
-        fig = create_comparison_chart(comparison_data)
-        
-        # Формируем рекомендации
-        recommendations = generate_financial_recommendations(comparison_data)
-        
-        await update.message.reply_photo(
-            photo=fig,
-            caption=recommendations,
-            reply_markup=get_main_menu_keyboard()
-        )
-        
-        plt.close(fig)
-        
-    except Exception as e:
-        logger.error(f"Ошибка при генерации сравнительной аналитики: {e}")
-        await update.message.reply_text(
-            f"❌ Ошибка при генерации сравнительной аналитики: {e}",
-            reply_markup=get_main_menu_keyboard()
-        )
-
-def get_monthly_expenses(month: int, year: int):
-    """Получить расходы за месяц"""
-    conn = get_db_connection()
-    if not conn:
-        return []
-    
-    try:
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT category, SUM(amount) as total
-            FROM expenses 
-            WHERE EXTRACT(MONTH FROM transaction_date) = %s
-            AND EXTRACT(YEAR FROM transaction_date) = %s
-            GROUP BY category
-            ORDER BY total DESC
-        ''', (month, year))
-        
-        # Приводим все суммы к float для совместимости
-        rows = cursor.fetchall()
-        return [(row[0], float(row[1])) for row in rows]
-    except Exception as e:
-        logger.error(f"Ошибка при получении расходов за месяц: {e}")
-        return []
-    finally:
-        conn.close()
-
-def get_budget_plan_items(plan_id: int):
-    """Получить элементы плана бюджета"""
-    conn = get_db_connection()
-    if not conn:
-        return []
-    
-    try:
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT category, amount, comment
-            FROM budget_plan_items 
-            WHERE plan_id = %s
-            ORDER BY amount DESC
-        ''', (plan_id,))
-        
-        # Приводим все суммы к float для совместимости
-        rows = cursor.fetchall()
-        return [(row[0], float(row[1]), row[2]) for row in rows]
-    except Exception as e:
-        logger.error(f"Ошибка при получении элементов плана: {e}")
-        return []
-    finally:
-        conn.close()
-
-def analyze_monthly_data(plan_items, expenses, total_budget):
-    """Анализ месячных данных"""
-    # Создаем словари для удобства
-    plan_dict = {item[0]: item[1] for item in plan_items}
-    expense_dict = {item[0]: item[1] for item in expenses}
-    
-    # Анализируем каждую категорию
-    analysis = []
-    total_planned = sum(plan_dict.values())
-    total_spent = sum(expense_dict.values())
-    
-    # Сравниваем план vs факт
-    for category in set(plan_dict.keys()) | set(expense_dict.keys()):
-        planned = plan_dict.get(category, 0)
-        spent = expense_dict.get(category, 0)
-        
-        if spent > planned:
-            overspend = spent - planned
-            overspend_percent = (overspend / planned * 100) if planned > 0 else 0
-            analysis.append(f"🔴 {category}: превышение на {overspend:.0f} Тг ({overspend_percent:.1f}%)")
-        elif spent < planned:
-            saved = planned - spent
-            saved_percent = (saved / planned * 100) if planned > 0 else 0
-            analysis.append(f"🟢 {category}: сэкономлено {saved:.0f} Тг ({saved_percent:.1f}%)")
+        if total_spent > total_planned:
+            report += f"⚠️ Превышение: {total_spent - total_planned:,.0f} ₸\n"
         else:
-            analysis.append(f"🟡 {category}: точно по плану")
-    
-    # Общий анализ
-    overall_analysis = f"📊 ОБЩИЙ АНАЛИЗ МЕСЯЦА\n\n"
-    overall_analysis += f"💰 Планируемый бюджет: {total_budget:,.0f} Тг\n"
-    overall_analysis += f"💸 Фактические расходы: {total_spent:,.0f} Тг\n"
-    
-    if total_spent > total_budget:
-        overspend_total = total_spent - total_budget
-        overall_analysis += f"🔴 Превышение бюджета: {overspend_total:,.0f} Тг\n"
-    else:
-        saved_total = total_budget - total_spent
-        overall_analysis += f"🟢 Сэкономлено: {saved_total:,.0f} Тг\n"
-    
-    overall_analysis += f"\n📋 ДЕТАЛЬНЫЙ АНАЛИЗ ПО КАТЕГОРИЯМ:\n"
-    overall_analysis += "\n".join(analysis)
-    
-    # Рекомендации
-    recommendations = generate_category_recommendations(plan_dict, expense_dict)
-    overall_analysis += f"\n\n💡 РЕКОМЕНДАЦИИ:\n{recommendations}"
-    
-    return overall_analysis
-
-def generate_category_recommendations(plan_dict, expense_dict):
-    """Генерация рекомендаций по категориям"""
-    recommendations = []
-    
-    for category in set(plan_dict.keys()) | set(expense_dict.keys()):
-        planned = plan_dict.get(category, 0)
-        spent = expense_dict.get(category, 0)
+            report += f"✅ Экономия: {total_planned - total_spent:,.0f} ₸\n"
         
-        if spent > planned * 1.2:  # Превышение более чем на 20%
-            recommendations.append(f"• {category}: Рассмотрите увеличение бюджета на 15-20%")
-        elif spent < planned * 0.8:  # Экономия более чем на 20%
-            recommendations.append(f"• {category}: Возможно, бюджет можно сократить на 10-15%")
-    
-    if not recommendations:
-        recommendations.append("• Ваш бюджет хорошо сбалансирован!")
-    
-    return "\n".join(recommendations)
-
-def create_analytics_chart(plan_items, expenses, total_budget):
-    """Создание графика аналитики"""
-    fig = plt.figure(figsize=(16, 10))
-    fig.patch.set_facecolor('#1a1a1a')
-    
-    # Цветовая палитра
-    colors = ['#6B8E23', '#4682B4', '#CD853F', '#20B2AA', '#8A2BE2', '#32CD32', '#FF8C00', '#DC143C', '#1E90FF', '#9370DB']
-    
-    # Создаем данные для сравнения
-    categories = []
-    planned_amounts = []
-    actual_amounts = []
-    
-    all_categories = set(item[0] for item in plan_items) | set(item[0] for item in expenses)
-    
-    for category in all_categories:
-        categories.append(category)
-        planned = next((item[1] for item in plan_items if item[0] == category), 0)
-        actual = next((item[1] for item in expenses if item[0] == category), 0)
-        planned_amounts.append(planned)
-        actual_amounts.append(actual)
-    
-    # График сравнения план vs факт
-    ax1 = fig.add_subplot(2, 2, 1)
-    x = range(len(categories))
-    width = 0.35
-    
-    bars1 = ax1.bar([i - width/2 for i in x], planned_amounts, width, label='План', color='#4682B4', alpha=0.8)
-    bars2 = ax1.bar([i + width/2 for i in x], actual_amounts, width, label='Факт', color='#CD853F', alpha=0.8)
-    
-    ax1.set_title('ПЛАН VS ФАКТ ПО КАТЕГОРИЯМ', color='white', fontsize=16, fontweight='bold')
-    ax1.set_ylabel('Сумма (Тг)', color='white', fontsize=14)
-    ax1.set_xlabel('Категории', color='white', fontsize=14)
-    ax1.set_xticks(x)
-    ax1.set_xticklabels(categories, rotation=45, ha='right', color='white')
-    ax1.tick_params(colors='white')
-    ax1.legend()
-    ax1.grid(True, alpha=0.2, linestyle='--', linewidth=0.5)
-    
-    # Круговая диаграмма распределения бюджета
-    ax2 = fig.add_subplot(2, 2, 2)
-    wedges, texts, autotexts = ax2.pie(planned_amounts, labels=categories, autopct='%1.1f%%',
-                                       startangle=90, colors=colors[:len(planned_amounts)],
-                                       shadow=True, explode=[0.05] * len(planned_amounts))
-    
-    for autotext in autotexts:
-        autotext.set_color('white')
-        autotext.set_fontweight('bold')
-    
-    ax2.set_title('ПЛАНИРУЕМОЕ РАСПРЕДЕЛЕНИЕ', color='white', fontsize=16, fontweight='bold')
-    
-    # График превышений/экономии
-    ax3 = fig.add_subplot(2, 2, 3)
-    differences = [actual - planned for planned, actual in zip(planned_amounts, actual_amounts)]
-    colors_diff = ['red' if diff > 0 else 'green' for diff in differences]
-    
-    bars3 = ax3.bar(categories, differences, color=colors_diff, alpha=0.8)
-    ax3.set_title('ПРЕВЫШЕНИЕ/ЭКОНОМИЯ', color='white', fontsize=16, fontweight='bold')
-    ax3.set_ylabel('Разница (Тг)', color='white', fontsize=14)
-    ax3.set_xticklabels(categories, rotation=45, ha='right', color='white')
-    ax3.tick_params(colors='white')
-    ax3.grid(True, alpha=0.2, linestyle='--', linewidth=0.5)
-    
-    # Добавляем значения на столбцы
-    for bar, diff in zip(bars3, differences):
-        height = bar.get_height()
-        ax3.text(bar.get_x() + bar.get_width()/2., height + (max(differences) if max(differences) > 0 else 0)*0.01,
-                 f'{diff:+.0f}', ha='center', va='bottom', color='white', fontweight='bold')
-    
-    # Общая статистика
-    ax4 = fig.add_subplot(2, 2, 4)
-    ax4.axis('off')
-    
-    total_planned = sum(planned_amounts)
-    total_actual = sum(actual_amounts)
-    
-    stats_text = f"📊 ОБЩАЯ СТАТИСТИКА\n\n"
-    stats_text += f"💰 Планируемый бюджет: {total_planned:,.0f} Тг\n"
-    stats_text += f"💸 Фактические расходы: {total_actual:,.0f} Тг\n"
-    
-    if total_actual > total_planned:
-        overspend = total_actual - total_planned
-        stats_text += f"🔴 Превышение: {overspend:,.0f} Тг\n"
-    else:
-        saved = total_planned - total_actual
-        stats_text += f"🟢 Сэкономлено: {saved:,.0f} Тг\n"
-    
-    ax4.text(0.1, 0.9, stats_text, transform=ax4.transAxes, fontsize=14, 
-             color='white', fontweight='bold', verticalalignment='top')
-    
-    fig.suptitle('АНАЛИТИКА РАСХОДОВ VS ПЛАНИРОВАНИЕ', color='white', fontsize=20, fontweight='bold', y=0.95)
-    
-    plt.tight_layout()
-    
-    # Сохраняем в BytesIO
-    img_buffer = io.BytesIO()
-    fig.savefig(img_buffer, format='png', facecolor='#1a1a1a', bbox_inches='tight', dpi=300)
-    img_buffer.seek(0)
-    
-    return img_buffer
-
-def get_comparison_data():
-    """Получить данные для сравнения"""
-    conn = get_db_connection()
-    if not conn:
-        return []
-    
-    try:
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT 
-                EXTRACT(MONTH FROM bp.plan_month) as month,
-                EXTRACT(YEAR FROM bp.plan_month) as year,
-                bp.total_amount,
-                SUM(e.amount) as total_expenses
-            FROM budget_plans bp
-            LEFT JOIN expenses e ON 
-                EXTRACT(MONTH FROM e.transaction_date) = EXTRACT(MONTH FROM bp.plan_month)
-                AND EXTRACT(YEAR FROM e.transaction_date) = EXTRACT(YEAR FROM bp.plan_month)
-            GROUP BY bp.id, bp.total_amount, bp.plan_month
-            ORDER BY bp.plan_month DESC
-            LIMIT 6
-        ''')
+        report += "\n📈 Детали по категориям:\n"
+        report += "─" * 50 + "\n"
         
-        # Приводим все суммы к float для совместимости
-        rows = cursor.fetchall()
-        return [(int(row[0]), int(row[1]), float(row[2]) if row[2] else 0.0, float(row[3]) if row[3] else 0.0) for row in rows]
+        for category in sorted(all_categories):
+            planned = plan_dict.get(category, 0)
+            spent = expense_dict.get(category, 0)
+            
+            report += f"\n🔸 {category}:\n"
+            report += f"   План: {planned:,.0f} ₸\n"
+            report += f"   Факт: {spent:,.0f} ₸\n"
+            
+            if spent > planned:
+                report += f"   ⚠️ Превышение: {spent - planned:,.0f} ₸\n"
+            elif spent < planned:
+                report += f"   ✅ Экономия: {planned - spent:,.0f} ₸\n"
+            else:
+                report += f"   ✅ В рамках плана\n"
+        
+        # Отправляем отчет
+        await update.message.reply_text(
+            report,
+            reply_markup=get_main_menu_keyboard()
+        )
+        
     except Exception as e:
-        logger.error(f"Ошибка при получении данных для сравнения: {e}")
-        return []
-    finally:
-        conn.close()
-
-def create_comparison_chart(comparison_data):
-    """Создание графика сравнения"""
-    fig = plt.figure(figsize=(16, 10))
-    fig.patch.set_facecolor('#1a1a1a')
-    
-    # Цветовая палитра
-    colors = ['#6B8E23', '#4682B4', '#CD853F', '#20B2AA', '#8A2BE2', '#32CD32']
-    
-    months = []
-    budgets = []
-    expenses = []
-    
-    for row in comparison_data:
-        month_num, year = int(row[0]), int(row[1])
-        month_name = get_month_name(month_num)
-        months.append(f"{month_name} {year}")
-        budgets.append(row[2])  # total_amount
-        expenses.append(row[3] if row[3] else 0)  # total_expenses
-    
-    # График сравнения бюджетов и расходов
-    ax1 = fig.add_subplot(2, 1, 1)
-    x = range(len(months))
-    width = 0.35
-    
-    bars1 = ax1.bar([i - width/2 for i in x], budgets, width, label='Планируемый бюджет', color='#4682B4', alpha=0.8)
-    bars2 = ax1.bar([i + width/2 for i in x], expenses, width, label='Фактические расходы', color='#CD853F', alpha=0.8)
-    
-    ax1.set_title('СРАВНЕНИЕ БЮДЖЕТОВ И РАСХОДОВ ПО МЕСЯЦАМ', color='white', fontsize=16, fontweight='bold')
-    ax1.set_ylabel('Сумма (Тг)', color='white', fontsize=14)
-    ax1.set_xticks(x)
-    ax1.set_xticklabels(months, rotation=45, ha='right', color='white')
-    ax1.tick_params(colors='white')
-    ax1.legend()
-    ax1.grid(True, alpha=0.2, linestyle='--', linewidth=0.5)
-    
-    # График трендов
-    ax2 = fig.add_subplot(2, 1, 2)
-    ax2.plot(months, budgets, 'o-', label='Планируемый бюджет', color='#4682B4', linewidth=3, markersize=8)
-    ax2.plot(months, expenses, 's-', label='Фактические расходы', color='#CD853F', linewidth=3, markersize=8)
-    
-    ax2.set_title('ТРЕНДЫ БЮДЖЕТИРОВАНИЯ', color='white', fontsize=16, fontweight='bold')
-    ax2.set_ylabel('Сумма (Тг)', color='white', fontsize=14)
-    ax2.set_xticklabels(months, rotation=45, ha='right', color='white')
-    ax2.tick_params(colors='white')
-    ax2.legend()
-    ax2.grid(True, alpha=0.2, linestyle='--', linewidth=0.5)
-    
-    fig.suptitle('СРАВНИТЕЛЬНАЯ АНАЛИТИКА ПО МЕСЯЦАМ', color='white', fontsize=20, fontweight='bold', y=0.95)
-    
-    plt.tight_layout()
-    
-    # Сохраняем в BytesIO
-    img_buffer = io.BytesIO()
-    fig.savefig(img_buffer, format='png', facecolor='#1a1a1a', bbox_inches='tight', dpi=300)
-    img_buffer.seek(0)
-    
-    return img_buffer
-
-def generate_financial_recommendations(comparison_data):
-    """Генерация финансовых рекомендаций"""
-    if not comparison_data:
-        return "❌ Недостаточно данных для анализа"
-    
-    recommendations = "💡 ФИНАНСОВЫЕ РЕКОМЕНДАЦИИ\n\n"
-    
-    # Анализируем тренды
-    total_budget = sum(row[2] for row in comparison_data)  # total_amount
-    total_expenses = sum(row[3] if row[3] else 0 for row in comparison_data)  # total_expenses
-    
-    if total_expenses > total_budget:
-        overspend = total_expenses - total_budget
-        overspend_percent = (overspend / total_budget * 100)
-        recommendations += f"🔴 Общее превышение бюджета: {overspend:,.0f} Тг ({overspend_percent:.1f}%)\n\n"
-        recommendations += "📋 Рекомендации по экономии:\n"
-        recommendations += "• Пересмотрите планирование на следующий месяц\n"
-        recommendations += "• Увеличьте бюджет на 10-15% для непредвиденных расходов\n"
-        recommendations += "• Анализируйте категории с регулярными превышениями\n"
-    else:
-        saved = total_budget - total_expenses
-        saved_percent = (saved / total_budget * 100)
-        recommendations += f"🟢 Общая экономия: {saved:,.0f} Тг ({saved_percent:.1f}%)\n\n"
-        recommendations += "📋 Рекомендации по оптимизации:\n"
-        recommendations += "• Ваш бюджет хорошо сбалансирован\n"
-        recommendations += "• Рассмотрите увеличение сбережений\n"
-        recommendations += "• Возможно, можно сократить некоторые категории\n"
-    
-    # Анализ по месяцам
-    recommendations += "\n📊 АНАЛИЗ ПО МЕСЯЦАМ:\n"
-    for row in comparison_data:
-        month_num, year = int(row[0]), int(row[1])
-        month_name = get_month_name(month_num)
-        budget = row[2]  # total_amount
-        expenses = row[3] if row[3] else 0  # total_expenses
-        
-        if expenses > budget:
-            overspend = expenses - budget
-            recommendations += f"• {month_name} {year}: превышение на {overspend:,.0f} Тг\n"
-        else:
-            saved = budget - expenses
-            recommendations += f"• {month_name} {year}: экономия {saved:,.0f} Тг\n"
-    
-    return recommendations
+        await update.message.reply_text(
+            f"❌ Ошибка при генерации отчета: {str(e)}",
+            reply_markup=get_main_menu_keyboard()
+        )
 
 def main():
     train_model(TRAINING_DATA)
@@ -2335,18 +1973,15 @@ def main():
     
     # Обработчик для аналитики
     analytics_conv_handler = ConversationHandler(
-        entry_points=[
-            MessageHandler(filters.Regex("^📈 Аналитика$"), analytics_menu),
-            CommandHandler("analytics", analytics_menu)
-        ],
+        entry_points=[MessageHandler(filters.Regex("^📈 Аналитика$"), analytics_menu)],
         states={
             ANALYTICS_MENU_STATE: [
-                MessageHandler(filters.Regex("^(📊 Анализ месяца|📈 Сравнение планов|🔙 Назад)$"), analytics_month_choice),
-                MessageHandler(filters.Regex("^📈 Аналитика$"), analytics_menu)
+                MessageHandler(filters.Regex("^(📊 Сравнение с планом|🔙 Назад)$"), analytics_month_choice)
             ],
             ANALYTICS_MONTH_STATE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, analytics_month_selected)
-            ],
+                MessageHandler(filters.Regex("^.*\d{4}$"), analytics_month_selected),
+                MessageHandler(filters.Regex("^🔙 Назад$"), analytics_month_selected)
+            ]
         },
         fallbacks=[CommandHandler("start", start)],
         allow_reentry=True
@@ -3110,6 +2745,56 @@ async def expense_delete_confirm(update: Update, context: ContextTypes.DEFAULT_T
             reply_markup=get_main_menu_keyboard()
         )
         return ConversationHandler.END
+
+def get_monthly_expenses(month: int, year: int):
+    """Получить расходы за месяц"""
+    conn = get_db_connection()
+    if not conn:
+        return []
+    
+    try:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT category, SUM(amount) as total
+            FROM expenses 
+            WHERE EXTRACT(MONTH FROM transaction_date) = %s
+            AND EXTRACT(YEAR FROM transaction_date) = %s
+            GROUP BY category
+            ORDER BY total DESC
+        ''', (month, year))
+        
+        # Приводим все суммы к float для совместимости
+        rows = cursor.fetchall()
+        return [(row[0], float(row[1])) for row in rows]
+    except Exception as e:
+        logger.error(f"Ошибка при получении расходов за месяц: {e}")
+        return []
+    finally:
+        conn.close()
+
+def get_budget_plan_items(plan_id: int):
+    """Получить элементы плана бюджета"""
+    conn = get_db_connection()
+    if not conn:
+        return []
+    
+    try:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT category, amount, comment
+            FROM budget_plan_items 
+            WHERE plan_id = %s
+            ORDER BY amount DESC
+        ''', (plan_id,))
+        
+        # Приводим все суммы к float для совместимости
+        rows = cursor.fetchall()
+        return [(row[0], float(row[1]), row[2]) for row in rows]
+    except Exception as e:
+        logger.error(f"Ошибка при получении элементов плана: {e}")
+        return []
+    finally:
+        conn.close()
 
 if __name__ == "__main__":
     main()
