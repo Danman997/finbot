@@ -891,7 +891,7 @@ async def reminder_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             "Выберите действие для напоминаний:",
             reply_markup=ReplyKeyboardMarkup([
                 ["📝 Добавить напоминание", "📋 Список напоминаний"], 
-                ["🔙 Назад"]
+                ["🗑️ Удалить напоминание", "🔙 Назад"]
             ], resize_keyboard=True)
         )
         return REMINDER_MENU_STATE
@@ -899,11 +899,7 @@ async def reminder_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     # Обработка выбора в меню напоминаний
     elif text == "📝 Добавить напоминание":
         await update.message.reply_text(
-            "Введите информацию о напоминании в формате:\n\n"
-            "Название | Описание | Сумма | Дата начала | Дата окончания\n\n"
-            "Например:\n"
-            "Автострахование | ОСАГО на машину | 25000 | 20.08.2025 | 19.08.2026\n\n"
-            "Или просто отправьте название:",
+            "Введите название напоминания:",
             reply_markup=ReplyKeyboardRemove()
         )
         return REMINDER_TITLE_STATE
@@ -935,13 +931,29 @@ async def reminder_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         
         reminders_text += f"💰 Общая сумма к оплате: {total_amount:.2f} Тг"
         
-        # Добавляем кнопки управления
+        await update.message.reply_text(
+            reminders_text,
+            reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+        )
+        return REMINDER_MENU_STATE
+    
+    elif text == "🗑️ Удалить напоминание":
+        reminders = get_all_active_reminders()
+        if not reminders:
+            await update.message.reply_text(
+                "У вас нет активных напоминаний для удаления.",
+                reply_markup=get_main_menu_keyboard()
+            )
+            return ConversationHandler.END
+        
+        reminders_text = "🗑️ Выберите напоминание для удаления:\n\n"
         keyboard = []
-        for i in range(0, len(reminders), 2):
-            row = [KeyboardButton(f"❌ Удалить {i+1}")]
-            if i + 1 < len(reminders):
-                row.append(KeyboardButton(f"❌ Удалить {i+2}"))
-            keyboard.append(row)
+        
+        for i, (rem_id, title, desc, amount, start_date, end_date, sent_10, sent_3, created) in enumerate(reminders, 1):
+            days_left = (end_date - datetime.now().date()).days
+            reminders_text += f"{i}. {title} - {amount:.2f} Тг (осталось {days_left} дней)\n"
+            keyboard.append([KeyboardButton(f"❌ Удалить {i}")])
+        
         keyboard.append([KeyboardButton("🔙 Назад")])
         
         await update.message.reply_text(
@@ -949,7 +961,7 @@ async def reminder_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         )
         context.user_data['reminders_list'] = reminders
-        return REMINDER_MANAGE_STATE
+        return REMINDER_DELETE_STATE
     
     elif text == "🔙 Назад":
         await update.message.reply_text(
@@ -958,7 +970,7 @@ async def reminder_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         )
         return ConversationHandler.END
     
-    return ConversationHandler.END
+    return REMINDER_MENU_STATE
 
 async def reminder_title_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обработка ввода названия напоминания"""
@@ -1484,6 +1496,7 @@ REMINDER_AMOUNT_STATE = 8
 REMINDER_START_DATE_STATE = 9
 REMINDER_END_DATE_STATE = 10
 REMINDER_MANAGE_STATE = 11
+REMINDER_DELETE_STATE = 12
 
 # --- Доп. состояния для планирования бюджета ---
 PLAN_MENU_STATE = 19
@@ -1493,6 +1506,7 @@ PLAN_CATEGORY_STATE = 22
 PLAN_AMOUNT_STATE = 23
 PLAN_COMMENT_STATE = 24
 PLAN_SUMMARY_STATE = 25
+PLAN_DELETE_STATE = 26
 
 def main():
     train_model(TRAINING_DATA)
@@ -1534,13 +1548,16 @@ def main():
             CommandHandler("reminders", reminder_menu)
         ],
         states={
-            REMINDER_MENU_STATE: [MessageHandler(filters.Regex("^(📝 Добавить напоминание|📋 Список напоминаний)$"), reminder_menu)],
+            REMINDER_MENU_STATE: [
+                MessageHandler(filters.Regex("^(📝 Добавить напоминание|📋 Список напоминаний|🗑️ Удалить напоминание|🔙 Назад)$"), reminder_menu)
+            ],
             REMINDER_TITLE_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_title_input)],
             REMINDER_DESC_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_desc_input)],
             REMINDER_AMOUNT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_amount_input)],
             REMINDER_START_DATE_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_start_date_input)],
             REMINDER_END_DATE_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_end_date_input)],
             REMINDER_MANAGE_STATE: [MessageHandler(filters.Regex("^(❌ Удалить \d+|🔙 Назад)$"), reminder_manage)],
+            REMINDER_DELETE_STATE: [MessageHandler(filters.Regex("^(❌ Удалить \d+|🔙 Назад)$"), reminder_delete_confirm)],
         },
         fallbacks=[MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)],
         allow_reentry=True
@@ -1554,18 +1571,16 @@ def main():
         ],
         states={
             PLAN_MENU_STATE: [
-                MessageHandler(filters.Regex("^(➕ Добавить планирование|📋 Список планов|🔙 Назад)$"), planning_menu),
+                MessageHandler(filters.Regex("^(➕ Добавить планирование|📋 Список планов|🗑️ Удалить план|🔙 Назад)$"), planning_menu),
             ],
             PLAN_MONTH_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_month)],
             PLAN_TOTAL_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_total)],
             PLAN_CATEGORY_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_category)],
             PLAN_AMOUNT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_amount)],
             PLAN_COMMENT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_comment)],
+            PLAN_DELETE_STATE: [MessageHandler(filters.Regex("^(❌ Удалить план \d+|🔙 Назад)$"), planning_delete_confirm)],
         },
-        fallbacks=[
-            MessageHandler(filters.Regex("^📚 Обучить модель$"), manual_training_fallback),
-            MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
-        ],
+        fallbacks=[MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)],
         allow_reentry=True
     )
 
@@ -1692,6 +1707,8 @@ def get_budget_plan(plan_month: date):
 
 # --- Диалог планирования бюджета ---
 async def planning_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+	# Инициализируем пустой список для статей бюджета
+	context.user_data['items'] = []
 	await update.message.reply_text(
 		"Выберите месяц планирования (введите в формате ММ.ГГГГ), например 08.2025:",
 		reply_markup=ReplyKeyboardRemove()
@@ -1796,7 +1813,7 @@ async def planning_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     if text == "📅 Планирование":
         await update.message.reply_text(
             "Выберите действие:",
-            reply_markup=ReplyKeyboardMarkup([["➕ Добавить планирование", "📋 Список планов"], ["🔙 Назад"]], resize_keyboard=True)
+            reply_markup=ReplyKeyboardMarkup([["➕ Добавить планирование", "📋 Список планов"], ["🗑️ Удалить план", "🔙 Назад"]], resize_keyboard=True)
         )
         return PLAN_MENU_STATE
     elif text == "➕ Добавить планирование":
@@ -1826,12 +1843,188 @@ async def planning_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         kb.append([KeyboardButton("🔙 Назад")])
         await update.message.reply_text("\n".join(text_lines), reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
         return PLAN_MENU_STATE
+    elif text == "🗑️ Удалить план":
+        return await planning_delete_start(update, context)
     elif text == "🔙 Назад":
         await update.message.reply_text("Возвращаюсь в главное меню", reply_markup=get_main_menu_keyboard())
         return ConversationHandler.END
     else:
         # Нажатие на конкретный месяц из списка — просто повторно вызвать меню
         return PLAN_MENU_STATE
+
+async def reminder_delete_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Подтверждение удаления напоминания"""
+    text = update.message.text
+    
+    if text == "🔙 Назад":
+        await update.message.reply_text(
+            "Выберите действие для напоминаний:",
+            reply_markup=ReplyKeyboardMarkup([
+                ["📝 Добавить напоминание", "📋 Список напоминаний"], 
+                ["🗑️ Удалить напоминание", "🔙 Назад"]
+            ], resize_keyboard=True)
+        )
+        return REMINDER_MENU_STATE
+    
+    # Проверяем формат "❌ Удалить N"
+    if text.startswith("❌ Удалить "):
+        try:
+            index = int(text.split()[-1]) - 1
+            reminders = context.user_data.get('reminders_list', [])
+            
+            if 0 <= index < len(reminders):
+                reminder = reminders[index]
+                rem_id = reminder[0]
+                title = reminder[1]
+                
+                # Удаляем напоминание из БД
+                if delete_reminder(rem_id):
+                    await update.message.reply_text(
+                        f"✅ Напоминание '{title}' успешно удалено!",
+                        reply_markup=get_main_menu_keyboard()
+                    )
+                    return ConversationHandler.END
+                else:
+                    await update.message.reply_text(
+                        "❌ Ошибка при удалении напоминания. Попробуйте снова.",
+                        reply_markup=get_main_menu_keyboard()
+                    )
+                    return ConversationHandler.END
+            else:
+                await update.message.reply_text(
+                    "❌ Неверный номер напоминания. Попробуйте снова.",
+                    reply_markup=get_main_menu_keyboard()
+                )
+                return ConversationHandler.END
+        except (ValueError, IndexError):
+            await update.message.reply_text(
+                "❌ Неверный формат. Попробуйте снова.",
+                reply_markup=get_main_menu_keyboard()
+            )
+            return ConversationHandler.END
+    
+    await update.message.reply_text(
+        "❌ Неверный выбор. Попробуйте снова.",
+        reply_markup=get_main_menu_keyboard()
+    )
+    return ConversationHandler.END
+
+async def planning_delete_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Начало удаления плана бюджета"""
+    text = update.message.text
+    
+    if text == "🗑️ Удалить план":
+        # Получаем список планов
+        conn = get_db_connection()
+        if not conn:
+            await update.message.reply_text("Не удалось подключиться к БД.", reply_markup=get_main_menu_keyboard())
+            return ConversationHandler.END
+        
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT id, plan_month, total_amount FROM budget_plans ORDER BY plan_month DESC')
+            plans = cursor.fetchall()
+        finally:
+            conn.close()
+        
+        if not plans:
+            await update.message.reply_text(
+                "У вас нет планов бюджета для удаления.",
+                reply_markup=get_main_menu_keyboard()
+            )
+            return ConversationHandler.END
+        
+        plans_text = "🗑️ Выберите план для удаления:\n\n"
+        keyboard = []
+        
+        for i, (plan_id, plan_month, total_amount) in enumerate(plans, 1):
+            plans_text += f"{i}. {plan_month.strftime('%m.%Y')} - {float(total_amount):.0f} Тг\n"
+            keyboard.append([KeyboardButton(f"❌ Удалить план {i}")])
+        
+        keyboard.append([KeyboardButton("🔙 Назад")])
+        
+        await update.message.reply_text(
+            plans_text,
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+        context.user_data['plans_list'] = plans
+        return PLAN_DELETE_STATE
+    
+    return PLAN_MENU_STATE
+
+async def planning_delete_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Подтверждение удаления плана бюджета"""
+    text = update.message.text
+    
+    if text == "🔙 Назад":
+        await update.message.reply_text(
+            "Выберите действие:",
+            reply_markup=ReplyKeyboardMarkup([["➕ Добавить планирование", "📋 Список планов"], ["🔙 Назад"]], resize_keyboard=True)
+        )
+        return PLAN_MENU_STATE
+    
+    # Проверяем формат "❌ Удалить план N"
+    if text.startswith("❌ Удалить план "):
+        try:
+            index = int(text.split()[-1]) - 1
+            plans = context.user_data.get('plans_list', [])
+            
+            if 0 <= index < len(plans):
+                plan = plans[index]
+                plan_id = plan[0]
+                plan_month = plan[1]
+                total_amount = plan[2]
+                
+                # Удаляем план из БД
+                if delete_budget_plan(plan_id):
+                    await update.message.reply_text(
+                        f"✅ План на {plan_month.strftime('%m.%Y')} ({float(total_amount):.0f} Тг) успешно удален!",
+                        reply_markup=get_main_menu_keyboard()
+                    )
+                    return ConversationHandler.END
+                else:
+                    await update.message.reply_text(
+                        "❌ Ошибка при удалении плана. Попробуйте снова.",
+                        reply_markup=get_main_menu_keyboard()
+                    )
+                    return ConversationHandler.END
+            else:
+                await update.message.reply_text(
+                    "❌ Неверный номер плана. Попробуйте снова.",
+                    reply_markup=get_main_menu_keyboard()
+                )
+                return ConversationHandler.END
+        except (ValueError, IndexError):
+            await update.message.reply_text(
+                "❌ Неверный формат. Попробуйте снова.",
+                reply_markup=get_main_menu_keyboard()
+            )
+            return ConversationHandler.END
+    
+    await update.message.reply_text(
+        "❌ Неверный выбор. Попробуйте снова.",
+        reply_markup=get_main_menu_keyboard()
+    )
+    return ConversationHandler.END
+
+def delete_budget_plan(plan_id):
+    """Удалить план бюджета и все его статьи"""
+    conn = get_db_connection()
+    if not conn:
+        return False
+    try:
+        cursor = conn.cursor()
+        # Сначала удаляем все статьи плана
+        cursor.execute('DELETE FROM budget_plan_items WHERE plan_id = %s', (plan_id,))
+        # Затем удаляем сам план
+        cursor.execute('DELETE FROM budget_plans WHERE id = %s', (plan_id,))
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка при удалении плана бюджета: {e}")
+        return False
+    finally:
+        conn.close()
 
 if __name__ == "__main__":
     main()
