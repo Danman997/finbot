@@ -1630,7 +1630,8 @@ def main():
         ],
         states={
             REMINDER_MENU_STATE: [
-                MessageHandler(filters.Regex("^(📝 Добавить напоминание|📋 Список напоминаний|🗑️ Удалить напоминание|🔙 Назад)$"), reminder_menu)
+                MessageHandler(filters.Regex("^(📝 Добавить напоминание|📋 Список напоминаний|🗑️ Удалить напоминание|🔙 Назад)$"), reminder_menu),
+                MessageHandler(filters.Regex("^⏰ Напоминания$"), reminder_menu)
             ],
             REMINDER_TITLE_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_title_input)],
             REMINDER_DESC_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_desc_input)],
@@ -1653,6 +1654,8 @@ def main():
         states={
             PLAN_MENU_STATE: [
                 MessageHandler(filters.Regex("^(➕ Добавить планирование|📋 Список планов|🗑️ Удалить план|🔙 Назад)$"), planning_menu),
+                MessageHandler(filters.Regex("^📅 Планирование$"), planning_menu),
+                MessageHandler(filters.Regex("^.* — .*$"), planning_menu)  # Обработка выбора месяца
             ],
             PLAN_MONTH_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_month)],
             PLAN_TOTAL_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_total)],
@@ -1935,6 +1938,8 @@ async def planning_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             kb.append([KeyboardButton(label)])
         kb.append([KeyboardButton("🔙 Назад")])
         await update.message.reply_text("\n".join(text_lines), reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
+        # Сохраняем планы в контексте для последующего выбора
+        context.user_data['plans_list'] = rows
         return PLAN_MENU_STATE
     elif text == "🗑️ Удалить план":
         return await planning_delete_start(update, context)
@@ -1942,6 +1947,10 @@ async def planning_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         await update.message.reply_text("Возвращаюсь в главное меню", reply_markup=get_main_menu_keyboard())
         return ConversationHandler.END
     else:
+        # Проверяем, не выбрал ли пользователь месяц из списка
+        if " — " in text:
+            # Это выбор месяца из списка, показываем детальный план
+            return await show_detailed_plan(update, context, text)
         # Нажатие на конкретный месяц из списка — просто повторно вызвать меню
         return PLAN_MENU_STATE
 
@@ -2182,6 +2191,125 @@ async def custom_category_input(update: Update, context: ContextTypes.DEFAULT_TY
                 reply_markup=get_main_menu_keyboard()
             )
             return ConversationHandler.END
+
+async def show_detailed_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, month_text: str) -> int:
+    """Показывает детальный план бюджета с круговой диаграммой"""
+    try:
+        # Извлекаем месяц и год из текста (формат: "08.2025 — 50000")
+        month_part = month_text.split(" — ")[0]
+        month, year = month_part.split(".")
+        plan_date = datetime.strptime(f"01.{month}.{year}", "%d.%m.%Y").date()
+        
+        # Получаем план из базы данных
+        conn = get_db_connection()
+        if not conn:
+            await update.message.reply_text("Не удалось подключиться к БД.", reply_markup=get_main_menu_keyboard())
+            return ConversationHandler.END
+        
+        try:
+            cursor = conn.cursor()
+            # Получаем основной план
+            cursor.execute('SELECT id, total_amount FROM budget_plans WHERE plan_month = %s', (plan_date,))
+            plan_row = cursor.fetchone()
+            
+            if not plan_row:
+                await update.message.reply_text(f"План на {month_part} не найден.", reply_markup=get_main_menu_keyboard())
+                return ConversationHandler.END
+            
+            plan_id, total_amount = plan_row
+            
+            # Получаем статьи бюджета
+            cursor.execute('SELECT category, amount, comment FROM budget_plan_items WHERE plan_id = %s ORDER BY amount DESC', (plan_id,))
+            items = cursor.fetchall()
+            
+        finally:
+            conn.close()
+        
+        if not items:
+            await update.message.reply_text(
+                f"📋 План на {month_part}\n"
+                f"💰 Общий бюджет: {float(total_amount):.0f} Тг\n"
+                f"📝 Статьи бюджета не добавлены.",
+                reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+            )
+            return PLAN_MENU_STATE
+        
+        # Создаем круговую диаграмму
+        categories = [item[0] for item in items]
+        amounts = [float(item[1]) for item in items]
+        comments = [item[2] for item in items]
+        
+        # Создаем фигуру
+        fig, ax = plt.subplots(figsize=(12, 8))
+        
+        # Создаем круговую диаграмму
+        wedges, texts, autotexts = ax.pie(
+            amounts, 
+            labels=categories, 
+            autopct='%1.1f%%',
+            startangle=90,
+            shadow=True,
+            explode=[0.05] * len(amounts),
+            colors=['#6B8E23', '#4682B4', '#CD853F', '#20B2AA', '#8A2BE2', '#32CD32', '#FF8C00', '#DC143C', '#1E90FF', '#9370DB']
+        )
+        
+        # Настройка текста
+        for autotext in autotexts:
+            autotext.set_color('white')
+            autotext.set_fontweight('bold')
+        
+        ax.set_title(f'📊 Распределение бюджета на {month_part}', fontsize=16, fontweight='bold', pad=20)
+        
+        # Добавляем легенду
+        legend_texts = []
+        for i, (cat, amt, comm) in enumerate(zip(categories, amounts, comments)):
+            legend_text = f"{cat}: {amt:.0f} Тг"
+            if comm:
+                legend_text += f" ({comm})"
+            legend_texts.append(legend_text)
+        
+        ax.legend(legend_texts, loc='center left', bbox_to_anchor=(1, 0.5), fontsize=10)
+        
+        plt.tight_layout()
+        
+        # Сохраняем график в буфер
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', dpi=300, bbox_inches='tight')
+        buf.seek(0)
+        plt.close()
+        
+        # Формируем текст с детальной информацией
+        total_allocated = sum(amounts)
+        remaining = float(total_amount) - total_allocated
+        
+        detail_text = f"📋 Детальный план на {month_part}\n\n"
+        detail_text += f"💰 Общий бюджет: {float(total_amount):.0f} Тг\n"
+        detail_text += f"📊 Распределено: {total_allocated:.0f} Тг\n"
+        detail_text += f"💵 Остаток: {remaining:.0f} Тг\n\n"
+        detail_text += "📝 Статьи бюджета:\n"
+        
+        for i, (cat, amt, comm) in enumerate(zip(categories, amounts, comments), 1):
+            detail_text += f"{i}. {cat}: {amt:.0f} Тг"
+            if comm:
+                detail_text += f" ({comm})"
+            detail_text += "\n"
+        
+        # Отправляем график с детальной информацией
+        await update.message.reply_photo(
+            photo=buf,
+            caption=detail_text,
+            reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+        )
+        
+        return PLAN_MENU_STATE
+        
+    except Exception as e:
+        logger.error(f"Ошибка при показе детального плана: {e}")
+        await update.message.reply_text(
+            f"Произошла ошибка при показе плана: {e}",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
 
 if __name__ == "__main__":
     main()
