@@ -463,6 +463,24 @@ def get_all_expenses_for_training():
     finally:
         conn.close()
 
+def delete_expense(expense_id: int) -> bool:
+    """Удалить расход по ID"""
+    conn = get_db_connection()
+    if not conn:
+        return False
+    try:
+        cursor = conn.cursor()
+        cursor.execute('''
+            DELETE FROM expenses WHERE id = %s
+        ''', (expense_id,))
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка при удалении расхода: {e}")
+        return False
+    finally:
+        conn.close()
+
 # --- Функции для работы с напоминаниями ---
 def add_payment_reminder(title, description, amount, start_date, end_date):
     """Добавить новое напоминание о платеже"""
@@ -697,28 +715,89 @@ async def report_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
 async def correction_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Меню исправления категорий"""
-    expenses = get_recent_expenses(10)
-    if not expenses:
+    keyboard = [
+        [KeyboardButton("1️⃣ Исправить расход")],
+        [KeyboardButton("2️⃣ Удалить расход")],
+        [KeyboardButton("3️⃣ Назад")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+    
+    await update.message.reply_text(
+        "🔧 Выберите действие:\n\n"
+        "1️⃣ Исправить расход - изменить категорию или сумму\n"
+        "2️⃣ Удалить расход - удалить запись из базы\n"
+        "3️⃣ Назад - вернуться в главное меню",
+        reply_markup=reply_markup
+    )
+    return CORRECTION_MENU_STATE
+
+async def correction_menu_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка выбора в меню исправления расходов"""
+    choice = update.message.text.strip()
+    
+    if choice == "1️⃣ Исправить расход":
+        # Показываем список расходов для исправления
+        expenses = get_recent_expenses(10)
+        if not expenses:
+            await update.message.reply_text(
+                "Нет расходов для исправления. Сначала добавьте несколько расходов.",
+                reply_markup=get_main_menu_keyboard()
+            )
+            return ConversationHandler.END
+        
+        # Формируем список расходов для выбора
+        expenses_text = "Выберите расход для исправления категории:\n\n"
+        for i, (exp_id, amount, desc, cat, date) in enumerate(expenses, 1):
+            date_str = date.strftime("%d.%m.%Y") if date else "Неизвестно"
+            expenses_text += f"{i}. {desc} - {amount} Тг ({cat}) - {date_str}\n"
+        
+        # Сохраняем расходы в контексте
+        context.user_data['expenses_to_correct'] = expenses
+        
         await update.message.reply_text(
-            "Нет расходов для исправления. Сначала добавьте несколько расходов.",
+            expenses_text + "\nВведите номер расхода (1-10):",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return EXPENSE_CHOICE_STATE
+        
+    elif choice == "2️⃣ Удалить расход":
+        # Показываем список расходов для удаления
+        expenses = get_recent_expenses(10)
+        if not expenses:
+            await update.message.reply_text(
+                "Нет расходов для удаления. Сначала добавьте несколько расходов.",
+                reply_markup=get_main_menu_keyboard()
+            )
+            return ConversationHandler.END
+        
+        # Формируем список расходов для выбора
+        expenses_text = "Выберите расход для удаления:\n\n"
+        for i, (exp_id, amount, desc, cat, date) in enumerate(expenses, 1):
+            date_str = date.strftime("%d.%m.%Y") if date else "Неизвестно"
+            expenses_text += f"{i}. {desc} - {amount} Тг ({cat}) - {date_str}\n"
+        
+        # Сохраняем расходы в контексте
+        context.user_data['expenses_to_delete'] = expenses
+        
+        await update.message.reply_text(
+            expenses_text + "\nВведите номер расхода для удаления (1-10):",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return EXPENSE_DELETE_STATE
+        
+    elif choice == "3️⃣ Назад":
+        await update.message.reply_text(
+            "Возвращаемся в главное меню",
             reply_markup=get_main_menu_keyboard()
         )
         return ConversationHandler.END
     
-    # Формируем список расходов для выбора
-    expenses_text = "Выберите расход для исправления категории:\n\n"
-    for i, (exp_id, amount, desc, cat, date) in enumerate(expenses, 1):
-        date_str = date.strftime("%d.%m.%Y") if date else "Неизвестно"
-        expenses_text += f"{i}. {desc} - {amount} Тг ({cat}) - {date_str}\n"
-    
-    # Сохраняем расходы в контексте
-    context.user_data['expenses_to_correct'] = expenses
-    
-    await update.message.reply_text(
-        expenses_text + "\nВведите номер расхода (1-10):",
-        reply_markup=ReplyKeyboardRemove()
-    )
-    return EXPENSE_CHOICE_STATE
+    else:
+        await update.message.reply_text(
+            "Пожалуйста, выберите один из предложенных вариантов:",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
 
 async def expense_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Выбор расхода для исправления"""
@@ -1569,24 +1648,27 @@ EXPENSE_CHOICE_STATE = 2
 CATEGORY_CHOICE_STATE = 3
 AMOUNT_EDIT_STATE = 4
 CUSTOM_CATEGORY_STATE = 5
-REMINDER_MENU_STATE = 6
-REMINDER_TITLE_STATE = 7
-REMINDER_DESC_STATE = 8
-REMINDER_AMOUNT_STATE = 9
-REMINDER_START_DATE_STATE = 10
-REMINDER_END_DATE_STATE = 11
-REMINDER_MANAGE_STATE = 12
-REMINDER_DELETE_STATE = 13
+CORRECTION_MENU_STATE = 6
+EXPENSE_DELETE_STATE = 7
+EXPENSE_DELETE_CONFIRM_STATE = 8
+REMINDER_MENU_STATE = 9
+REMINDER_TITLE_STATE = 10
+REMINDER_DESC_STATE = 11
+REMINDER_AMOUNT_STATE = 12
+REMINDER_START_DATE_STATE = 13
+REMINDER_END_DATE_STATE = 14
+REMINDER_MANAGE_STATE = 15
+REMINDER_DELETE_STATE = 16
 
 # --- Доп. состояния для планирования бюджета ---
-PLAN_MENU_STATE = 19
-PLAN_MONTH_STATE = 20
-PLAN_TOTAL_STATE = 21
-PLAN_CATEGORY_STATE = 22
-PLAN_AMOUNT_STATE = 23
-PLAN_COMMENT_STATE = 24
-PLAN_SUMMARY_STATE = 25
-PLAN_DELETE_STATE = 26
+PLAN_MENU_STATE = 22
+PLAN_MONTH_STATE = 23
+PLAN_TOTAL_STATE = 24
+PLAN_CATEGORY_STATE = 25
+PLAN_AMOUNT_STATE = 26
+PLAN_COMMENT_STATE = 27
+PLAN_SUMMARY_STATE = 28
+PLAN_DELETE_STATE = 29
 
 def main():
     train_model(TRAINING_DATA)
@@ -1613,10 +1695,13 @@ def main():
             CommandHandler("correct", correction_menu)
         ],
         states={
+            CORRECTION_MENU_STATE: [MessageHandler(filters.Regex("^(1️⃣ Исправить расход|2️⃣ Удалить расход|3️⃣ Назад)$"), correction_menu_choice)],
             EXPENSE_CHOICE_STATE: [MessageHandler(filters.Regex("^[0-9]+$"), expense_choice)],
             CATEGORY_CHOICE_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, category_choice)],
             CUSTOM_CATEGORY_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, custom_category_input)],
             AMOUNT_EDIT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, amount_edit)],
+            EXPENSE_DELETE_STATE: [MessageHandler(filters.Regex("^[0-9]+$"), expense_delete_choice)],
+            EXPENSE_DELETE_CONFIRM_STATE: [MessageHandler(filters.Regex("^(✅ Да, удалить|❌ Отмена)$"), expense_delete_confirm)],
         },
         fallbacks=[MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)],
         allow_reentry=True
@@ -2307,6 +2392,97 @@ async def show_detailed_plan(update: Update, context: ContextTypes.DEFAULT_TYPE,
         logger.error(f"Ошибка при показе детального плана: {e}")
         await update.message.reply_text(
             f"Произошла ошибка при показе плана: {e}",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+
+async def expense_delete_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Выбор расхода для удаления"""
+    try:
+        choice = int(update.message.text)
+        expenses = context.user_data.get('expenses_to_delete', [])
+        
+        if choice < 1 or choice > len(expenses):
+            await update.message.reply_text(
+                f"Пожалуйста, введите число от 1 до {len(expenses)}",
+                reply_markup=get_main_menu_keyboard()
+            )
+            return ConversationHandler.END
+        
+        # Сохраняем выбранный расход для удаления
+        selected_expense = expenses[choice - 1]
+        context.user_data['expense_to_delete'] = selected_expense
+        
+        exp_id, amount, desc, cat, date = selected_expense
+        date_str = date.strftime("%d.%m.%Y") if date else "Неизвестно"
+        
+        # Создаем клавиатуру для подтверждения
+        keyboard = [
+            [KeyboardButton("✅ Да, удалить")],
+            [KeyboardButton("❌ Отмена")]
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+        
+        await update.message.reply_text(
+            f"⚠️ Вы действительно хотите удалить этот расход?\n\n"
+            f"📝 {desc}\n"
+            f"💰 {amount} Тг\n"
+            f"🏷️ Категория: {cat}\n"
+            f"📅 {date_str}\n\n"
+            f"Это действие нельзя отменить!",
+            reply_markup=reply_markup
+        )
+        return EXPENSE_DELETE_CONFIRM_STATE
+        
+    except ValueError:
+        await update.message.reply_text(
+            "Пожалуйста, введите число.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+
+async def expense_delete_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Подтверждение удаления расхода"""
+    choice = update.message.text.strip()
+    
+    if choice == "✅ Да, удалить":
+        selected_expense = context.user_data.get('expense_to_delete')
+        if not selected_expense:
+            await update.message.reply_text(
+                "Ошибка: расход не найден. Попробуйте снова.",
+                reply_markup=get_main_menu_keyboard()
+            )
+            return ConversationHandler.END
+        
+        exp_id, amount, desc, cat, date = selected_expense
+        
+        # Удаляем расход из базы данных
+        if delete_expense(exp_id):
+            await update.message.reply_text(
+                f"✅ Расход успешно удален!\n\n"
+                f"📝 {desc}\n"
+                f"💰 {amount} Тг\n"
+                f"🏷️ {cat}\n"
+                f"📅 {date.strftime('%d.%m.%Y') if date else 'Неизвестно'}",
+                reply_markup=get_main_menu_keyboard()
+            )
+        else:
+            await update.message.reply_text(
+                "❌ Ошибка при удалении расхода. Попробуйте снова.",
+                reply_markup=get_main_menu_keyboard()
+            )
+        return ConversationHandler.END
+        
+    elif choice == "❌ Отмена":
+        await update.message.reply_text(
+            "Удаление отменено. Возвращаемся в главное меню.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+    
+    else:
+        await update.message.reply_text(
+            "Пожалуйста, выберите один из предложенных вариантов.",
             reply_markup=get_main_menu_keyboard()
         )
         return ConversationHandler.END
