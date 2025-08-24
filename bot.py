@@ -710,6 +710,12 @@ def validate_block_access(block_name: str, user_id: int) -> bool:
     """Проверяет доступ пользователя к блоку (базовая защита)"""
     if not is_block_protected(block_name):
         return False
+    
+    # Проверяем, авторизован ли пользователь
+    if not is_user_authorized(user_id):
+        logger.info(f"Пользователь {user_id} не авторизован для доступа к блоку {block_name}")
+        return False
+    
     # В будущем здесь можно добавить проверку прав пользователя
     return True
 
@@ -797,7 +803,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
         )
         context.user_data['auth_state'] = 'waiting_for_username'
-        return 'waiting_for_username'
+        return
     
     # Пользователь авторизован - показываем главное меню
     await update.message.reply_text(
@@ -932,12 +938,10 @@ async def auth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             reply_markup=ReplyKeyboardRemove()
         )
         context.user_data.pop('auth_state', None)
-        return ConversationHandler.END
+        return
     
-    auth_state = context.user_data.get('auth_state')
-    
-    if auth_state == 'waiting_for_username':
-        # Пользователь ввел имя пользователя
+    # Проверяем, что пользователь находится в состоянии ожидания username
+    if context.user_data.get('auth_state') == 'waiting_for_username':
         username = text.strip()
         
         if len(username) < 2:
@@ -946,7 +950,7 @@ async def auth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 "Попробуйте еще раз:",
                 reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
             )
-            return 'waiting_for_username'
+            return
         
         # Проверяем, есть ли username в списке авторизованных
         if is_username_authorized(username):
@@ -967,14 +971,14 @@ async def auth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 reply_markup=get_main_menu_keyboard()
             )
             context.user_data.pop('auth_state', None)
-            return ConversationHandler.END
+            return
         else:
             await update.message.reply_text(
                 "❌ Ваше имя не найдено в списке авторизованных пользователей.\n\n"
                 "Обратитесь к администратору для добавления в список:",
                 reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
             )
-            return 'waiting_for_username'
+            return
     
     # Неизвестное состояние
     await update.message.reply_text(
@@ -2034,6 +2038,56 @@ def parse_date_period(text):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     
+    # Проверяем, находится ли пользователь в состоянии ожидания username
+    if context.user_data.get('auth_state') == 'waiting_for_username':
+        # Обрабатываем ввод username
+        text = update.message.text.strip()
+        
+        if text == "🔙 Отмена":
+            await update.message.reply_text(
+                "❌ Доступ к боту отменен. Обратитесь к администратору.",
+                reply_markup=ReplyKeyboardRemove()
+            )
+            context.user_data.pop('auth_state', None)
+            return
+        
+        # Проверяем username
+        if len(text) < 2:
+            await update.message.reply_text(
+                "❌ Имя должно содержать минимум 2 символа.\n\n"
+                "Попробуйте еще раз:",
+                reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
+            )
+            return
+        
+        # Проверяем, есть ли username в списке авторизованных
+        if is_username_authorized(text):
+            logger.info(f"Пользователь {user_id} авторизован по имени '{text}'")
+            
+            # Обновляем telegram_id для этого пользователя
+            users_data = load_authorized_users()
+            for user in users_data.get("users", []):
+                if user.get("username") == text:
+                    user["telegram_id"] = user_id
+                    save_authorized_users(users_data)
+                    logger.info(f"Обновлен telegram_id для пользователя '{text}': {user_id}")
+                    break
+            
+            await update.message.reply_text(
+                "✅ Ваше имя найдено в списке авторизованных пользователей!\n\n"
+                "Теперь у вас есть доступ к боту!",
+                reply_markup=get_main_menu_keyboard()
+            )
+            context.user_data.pop('auth_state', None)
+            return
+        else:
+            await update.message.reply_text(
+                "❌ Ваше имя не найдено в списке авторизованных пользователей.\n\n"
+                "Обратитесь к администратору для добавления в список:",
+                reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
+            )
+            return
+    
     # Проверяем защиту блока расходов
     if not validate_block_access("expenses", user_id):
         await update.message.reply_text(
@@ -2570,20 +2624,10 @@ def main():
     application.add_handler(CommandHandler("start", start))
     
     # Обработчик для аутентификации (должен быть перед общим обработчиком сообщений)
-    auth_conv_handler = ConversationHandler(
-        entry_points=[
-            CommandHandler("start", start)
-        ],
-        states={
-            'waiting_for_username': [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, auth_handler)
-            ]
-        },
-        fallbacks=[CommandHandler("start", start)],
-        allow_reentry=True
-    )
-    
-    application.add_handler(auth_conv_handler)
+    application.add_handler(MessageHandler(
+        filters.Regex("^🔙 Отмена$"), 
+        auth_handler
+    ))
     
     # Обработчик для управления группой (должен быть перед общим обработчиком сообщений)
     application.add_handler(MessageHandler(
@@ -2591,6 +2635,7 @@ def main():
         group_management_handler
     ))
     
+    # Общий обработчик сообщений (должен быть последним)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     logger.info("Бот запущен!")

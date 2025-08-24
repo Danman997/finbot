@@ -1,4 +1,10 @@
 {
-  "users": [],
+  "users": [
+    {
+      "username": "Айша0312",
+      "added_date": "2025-08-24T18:22:40.959656",
+      "status": "active"
+    }
+  ],
   "admin": 498410375
 }
