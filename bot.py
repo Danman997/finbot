@@ -733,7 +733,8 @@ def get_admin_menu_keyboard():
     """Клавиатура для администратора"""
     keyboard = [
         [KeyboardButton("👥 Добавить пользователя"), KeyboardButton("📋 Список пользователей")],
-        [KeyboardButton("🔙 Главное меню")]
+        [KeyboardButton("📁 Управление папками"), KeyboardButton("🔧 Роли пользователей")],
+        [KeyboardButton("📊 Статистика системы"), KeyboardButton("🔙 Главное меню")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -850,16 +851,33 @@ async def admin_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             added_date = user.get("added_date", "Не указана")
             status = user.get("status", "Неизвестен")
             telegram_id = user.get("telegram_id", "Не привязан")
+            role = user.get("role", "user")
+            role_name = USER_ROLES.get(role, role)
+            folder_name = user.get("folder_name", "Не задана")
             
             users_text += f"{i}. 👤 {username}\n"
             users_text += f"   🆔 Telegram ID: {telegram_id}\n"
             users_text += f"   📅 Добавлен: {added_date[:10]}\n"
-            users_text += f"   ✅ Статус: {status}\n\n"
+            users_text += f"   ✅ Статус: {status}\n"
+            users_text += f"   🔧 Роль: {role_name}\n"
+            users_text += f"   📁 Папка: {folder_name}\n\n"
         
         await update.message.reply_text(
             users_text,
             reply_markup=get_admin_menu_keyboard()
         )
+        return
+    
+    elif text == "📁 Управление папками":
+        await admin_folder_management(update, context)
+        return
+    
+    elif text == "🔧 Роли пользователей":
+        await admin_roles_management(update, context)
+        return
+    
+    elif text == "📊 Статистика системы":
+        await admin_system_stats(update, context)
         return
     
     elif text == "🔙 Главное меню":
@@ -894,16 +912,98 @@ async def admin_username_input(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return 'waiting_for_username'
     
+    # Сохраняем имя пользователя в контексте
+    context.user_data['new_username'] = username
+    
+    # Запрашиваем название папки
+    await update.message.reply_text(
+        f"👤 Пользователь: {username}\n\n"
+        "📁 Введите уникальное название для папки пользователя\n"
+        "(например: 'my_finances', 'personal_budget'):",
+        reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+    )
+    
+    return "waiting_folder_name"
+
+async def admin_back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Возврат в админское меню"""
+    await update.message.reply_text(
+        "Админ-меню:",
+        reply_markup=get_admin_menu_keyboard()
+    )
+    return ConversationHandler.END
+
+async def admin_folder_name_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Обработчик ввода названия папки для нового пользователя"""
+    user_id = update.effective_user.id
+    text = update.message.text
+    
+    if text == "🔙 Назад":
+        await update.message.reply_text(
+            "👥 Введите имя пользователя для добавления:",
+            reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+        )
+        return "waiting_for_username"
+    
+    folder_name = text.strip()
+    username = context.user_data.get('new_username')
+    
+    # Запрашиваем роль пользователя
+    await update.message.reply_text(
+        f"👤 Пользователь: {username}\n"
+        f"📁 Папка: {folder_name}\n\n"
+        "🔧 Выберите роль пользователя:",
+        reply_markup=ReplyKeyboardMarkup([
+            [KeyboardButton("👤 Обычный пользователь"), KeyboardButton("🛡️ Модератор")],
+            [KeyboardButton("🔙 Назад")]
+        ], resize_keyboard=True)
+    )
+    
+    context.user_data['new_folder_name'] = folder_name
+    return "waiting_role"
+
+async def admin_role_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Обработчик выбора роли для нового пользователя"""
+    user_id = update.effective_user.id
+    text = update.message.text
+    
+    if text == "🔙 Назад":
+        await update.message.reply_text(
+            "📁 Введите уникальное название для папки пользователя:",
+            reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+        )
+        return "waiting_folder_name"
+    
+    username = context.user_data.get('new_username')
+    folder_name = context.user_data.get('new_folder_name')
+    
+    # Определяем роль
+    if text == "👤 Обычный пользователь":
+        role = "user"
+    elif text == "🛡️ Модератор":
+        role = "moderator"
+    else:
+        await update.message.reply_text(
+            "❌ Неверный выбор роли. Попробуйте снова:",
+            reply_markup=ReplyKeyboardMarkup([
+                [KeyboardButton("👤 Обычный пользователь"), KeyboardButton("🛡️ Модератор")],
+                [KeyboardButton("🔙 Назад")]
+            ], resize_keyboard=True)
+        )
+        return "waiting_role"
+    
     # Добавляем пользователя
-    logger.info(f"Попытка добавить пользователя '{username}'")
-    success, message = add_authorized_user(username)
+    logger.info(f"Попытка добавить пользователя '{username}' с папкой '{folder_name}' и ролью '{role}'")
+    success, message = add_authorized_user(username, None, folder_name, role)
     
     if success:
         logger.info(f"Пользователь '{username}' успешно добавлен")
         await update.message.reply_text(
-            f"✅ {message}\n\n"
+            f"✅ Пользователь успешно добавлен!\n\n"
             f"👤 Имя: {username}\n"
-            f"📅 Дата регистрации: {datetime.now().strftime('%d.%m.%Y')}\n\n"
+            f"📁 Папка: {folder_name}\n"
+            f"🔧 Роль: {USER_ROLES.get(role, role)}\n"
+            f"📅 Дата: {datetime.now().strftime('%d.%m.%Y')}\n\n"
             "Пользователь может теперь запустить бота командой /start",
             reply_markup=get_admin_menu_keyboard()
         )
@@ -914,17 +1014,158 @@ async def admin_username_input(update: Update, context: ContextTypes.DEFAULT_TYP
             "Попробуйте другое имя:",
             reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
         )
-        return 'waiting_for_username'
+    
+    # Очищаем контекст
+    context.user_data.pop('new_username', None)
+    context.user_data.pop('new_folder_name', None)
     
     return ConversationHandler.END
 
-async def admin_back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Возврат в админское меню"""
+async def admin_folder_management(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Управление папками пользователей"""
+    user_id = update.effective_user.id
+    
+    # Проверяем, является ли пользователь администратором
+    users_data = load_authorized_users()
+    if user_id != users_data.get("admin"):
+        await update.message.reply_text(
+            "❌ Доступ запрещен. Только администратор может использовать эту функцию.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return
+    
+    # Получаем список всех папок пользователей
+    users_dir = "users"
+    if not os.path.exists(users_dir):
+        await update.message.reply_text(
+            "📁 Папка пользователей не найдена.",
+            reply_markup=get_admin_menu_keyboard()
+        )
+        return
+    
+    folders = []
+    for folder in os.listdir(users_dir):
+        if os.path.isdir(os.path.join(users_dir, folder)):
+            folders.append(folder)
+    
+    if not folders:
+        await update.message.reply_text(
+            "📁 Папки пользователей не найдены.",
+            reply_markup=get_admin_menu_keyboard()
+        )
+        return
+    
+    # Формируем список папок
+    folders_text = "📁 Список папок пользователей:\n\n"
+    for i, folder in enumerate(folders, 1):
+        folder_path = os.path.join(users_dir, folder)
+        folder_size = sum(os.path.getsize(os.path.join(dirpath, filename))
+                         for dirpath, dirnames, filenames in os.walk(folder_path)
+                         for filename in filenames)
+        folders_text += f"{i}. {folder}\n"
+        folders_text += f"   📊 Размер: {folder_size / 1024:.1f} KB\n\n"
+    
     await update.message.reply_text(
-        "Админ-меню:",
+        folders_text,
         reply_markup=get_admin_menu_keyboard()
     )
-    return ConversationHandler.END
+
+async def admin_roles_management(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Управление ролями пользователей"""
+    user_id = update.effective_user.id
+    
+    # Проверяем, является ли пользователь администратором
+    users_data = load_authorized_users()
+    if user_id != users_data.get("admin"):
+        await update.message.reply_text(
+            "❌ Доступ запрещен. Только администратор может использовать эту функцию.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return
+    
+    users = get_authorized_users_list()
+    if not users:
+        await update.message.reply_text(
+            "👥 Пользователи не найдены.",
+            reply_markup=get_admin_menu_keyboard()
+        )
+        return
+    
+    # Формируем список пользователей с ролями
+    roles_text = "🔧 Управление ролями пользователей:\n\n"
+    for user in users:
+        role = user.get('role', 'user')
+        role_name = USER_ROLES.get(role, role)
+        status = user.get('status', 'unknown')
+        folders_text = f"📁 {user.get('folder_name', 'Не задана')}" if user.get('folder_name') else "📁 Не создана"
+        
+        roles_text += f"👤 {user.get('username', 'Неизвестно')}\n"
+        roles_text += f"   🔧 Роль: {role_name}\n"
+        roles_text += f"   📊 Статус: {status}\n"
+        roles_text += f"   {folders_text}\n\n"
+    
+    await update.message.reply_text(
+        roles_text,
+        reply_markup=get_admin_menu_keyboard()
+    )
+
+async def admin_system_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Статистика системы"""
+    user_id = update.effective_user.id
+    
+    # Проверяем, является ли пользователь администратором
+    users_data = load_authorized_users()
+    if user_id != users_data.get("admin"):
+        await update.message.reply_text(
+            "❌ Доступ запрещен. Только администратор может использовать эту функцию.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return
+    
+    # Собираем статистику
+    users = get_authorized_users_list()
+    total_users = len(users)
+    active_users = len([u for u in users if u.get('status') == 'active'])
+    
+    # Статистика по ролям
+    role_stats = {}
+    for user in users:
+        role = user.get('role', 'user')
+        role_stats[role] = role_stats.get(role, 0) + 1
+    
+    # Статистика по папкам
+    users_dir = "users"
+    total_folders = 0
+    total_size = 0
+    if os.path.exists(users_dir):
+        for folder in os.listdir(users_dir):
+            folder_path = os.path.join(users_dir, folder)
+            if os.path.isdir(folder_path):
+                total_folders += 1
+                total_size += sum(os.path.getsize(os.path.join(dirpath, filename))
+                                for dirpath, dirnames, filenames in os.walk(folder_path)
+                                for filename in filenames)
+    
+    # Формируем отчет
+    stats_text = "📊 Статистика системы:\n\n"
+    stats_text += f"👥 Пользователи:\n"
+    stats_text += f"   📈 Всего: {total_users}\n"
+    stats_text += f"   ✅ Активных: {active_users}\n"
+    stats_text += f"   ❌ Неактивных: {total_users - active_users}\n\n"
+    
+    stats_text += f"🔧 Роли:\n"
+    for role, count in role_stats.items():
+        role_name = USER_ROLES.get(role, role)
+        stats_text += f"   {role_name}: {count}\n"
+    
+    stats_text += f"\n📁 Папки:\n"
+    stats_text += f"   📂 Всего папок: {total_folders}\n"
+    stats_text += f"   💾 Общий размер: {total_size / 1024 / 1024:.1f} MB\n"
+    
+    await update.message.reply_text(
+        stats_text,
+        reply_markup=get_admin_menu_keyboard()
+    )
 
 # --- ОБРАБОТЧИК АУТЕНТИФИКАЦИИ ---
 async def auth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2602,12 +2843,20 @@ def main():
     # Обработчик для админ-меню
     admin_conv_handler = ConversationHandler(
         entry_points=[
-            MessageHandler(filters.Regex("^(👥 Добавить пользователя|📋 Список пользователей|🔙 Главное меню)$"), 
+            MessageHandler(filters.Regex("^(👥 Добавить пользователя|📋 Список пользователей|📁 Управление папками|🔧 Роли пользователей|📊 Статистика системы|🔙 Главное меню)$"), 
             admin_menu_handler)
         ],
         states={
             'waiting_for_username': [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, admin_username_input),
+                MessageHandler(filters.Regex("^🔙 Назад$"), admin_back_to_menu)
+            ],
+            'waiting_folder_name': [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_folder_name_input),
+                MessageHandler(filters.Regex("^🔙 Назад$"), admin_back_to_menu)
+            ],
+            'waiting_role': [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_role_input),
                 MessageHandler(filters.Regex("^🔙 Назад$"), admin_back_to_menu)
             ]
         },
@@ -3454,6 +3703,13 @@ def get_budget_plan_items(plan_id: int):
 ADMIN_USER_ID = 498410375  # Замените на ваш Telegram ID
 USERS_FILE = "authorized_users.json"
 
+# Роли пользователей
+USER_ROLES = {
+    "admin": "Администратор",
+    "moderator": "Модератор", 
+    "user": "Пользователь"
+}
+
 def load_authorized_users():
     """Загружает список авторизованных пользователей из файла"""
     try:
@@ -3513,8 +3769,8 @@ def is_username_authorized(username: str) -> bool:
     logger.info(f"Username '{username}' не найден в списке авторизованных")
     return False
 
-def add_authorized_user(username: str, user_id: int = None) -> tuple[bool, str]:
-    """Добавляет нового авторизованного пользователя"""
+def add_authorized_user(username: str, user_id: int = None, folder_name: str = None, role: str = "user") -> tuple[bool, str]:
+    """Добавляет нового авторизованного пользователя с созданием персональной папки"""
     try:
         users_data = load_authorized_users()
         
@@ -3523,11 +3779,17 @@ def add_authorized_user(username: str, user_id: int = None) -> tuple[bool, str]:
             if user.get("username") == username:
                 return False, "Пользователь с таким именем уже существует"
         
-        # Добавляем нового пользователя
+        # Генерируем уникальное название папки, если не задано
+        if not folder_name:
+            folder_name = f"user_{username}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        
+        # Добавляем нового пользователя с дополнительными полями
         new_user = {
             "username": username,
             "added_date": datetime.now().isoformat(),
-            "status": "active"
+            "status": "active",
+            "role": role,
+            "folder_name": folder_name
         }
         
         if user_id:
@@ -3538,8 +3800,16 @@ def add_authorized_user(username: str, user_id: int = None) -> tuple[bool, str]:
         logger.info(f"Добавлен новый пользователь: {new_user}")
         
         if save_authorized_users(users_data):
+            # Создаем персональную папку для пользователя
+            if user_id:
+                folder_created, folder_message = create_user_folder(username, folder_name, user_id)
+                if folder_created:
+                    logger.info(f"Персональная папка создана для пользователя {username}")
+                else:
+                    logger.warning(f"Не удалось создать папку для пользователя {username}: {folder_message}")
+            
             logger.info(f"Пользователь '{username}' успешно сохранен")
-            return True, "Пользователь успешно добавлен"
+            return True, f"Пользователь успешно добавлен с папкой: {folder_name}"
         else:
             logger.error(f"Ошибка при сохранении пользователя '{username}'")
             return False, "Ошибка при сохранении"
@@ -3552,6 +3822,268 @@ def get_authorized_users_list() -> list:
     """Возвращает список всех авторизованных пользователей"""
     users_data = load_authorized_users()
     return users_data.get("users", [])
+
+# --- ФУНКЦИИ СОЗДАНИЯ ПЕРСОНАЛЬНЫХ ПАПОК ---
+def create_user_folder(username: str, folder_name: str, user_id: int) -> tuple[bool, str]:
+    """Создает персональную папку пользователя с необходимыми файлами"""
+    try:
+        # Создаем основную папку пользователя
+        user_folder = os.path.join("users", f"{username}_{user_id}_{folder_name}")
+        os.makedirs(user_folder, exist_ok=True)
+        
+        # Создаем подпапки
+        subfolders = ["logs", "data", "exports", "backups", "templates"]
+        for subfolder in subfolders:
+            os.makedirs(os.path.join(user_folder, subfolder), exist_ok=True)
+        
+        # Создаем файлы конфигурации
+        create_user_config_files(user_folder, username, user_id, folder_name)
+        
+        logger.info(f"Создана персональная папка для пользователя {username}: {user_folder}")
+        return True, f"Персональная папка создана: {folder_name}"
+        
+    except Exception as e:
+        logger.error(f"Ошибка при создании папки пользователя {username}: {e}")
+        return False, f"Ошибка при создании папки: {e}"
+
+def create_user_config_files(user_folder: str, username: str, user_id: int, folder_name: str):
+    """Создает необходимые конфигурационные файлы для пользователя"""
+    
+    # 1. Персональный конфиг пользователя
+    user_config = {
+        "username": username,
+        "user_id": user_id,
+        "folder_name": folder_name,
+        "created_at": datetime.now().isoformat(),
+        "role": "user",
+        "settings": {
+            "currency": "Tg",
+            "language": "ru",
+            "notifications": True,
+            "auto_classification": True
+        },
+        "permissions": {
+            "add_expenses": True,
+            "view_reports": True,
+            "manage_reminders": True,
+            "planning": True,
+            "analytics": True
+        }
+    }
+    
+    with open(os.path.join(user_folder, "user_config.json"), 'w', encoding='utf-8') as f:
+        json.dump(user_config, f, ensure_ascii=False, indent=2)
+    
+    # 2. Персональные категории пользователя
+    user_categories = {
+        "Продукты": [],
+        "Транспорт": [],
+        "Развлечения": [],
+        "Здоровье": [],
+        "Одежда": [],
+        "Коммунальные": [],
+        "Образование": [],
+        "Прочее": []
+    }
+    
+    with open(os.path.join(user_folder, "user_categories.json"), 'w', encoding='utf-8') as f:
+        json.dump(user_categories, f, ensure_ascii=False, indent=2)
+    
+    # 3. Шаблон для персональных напоминаний
+    reminders_template = {
+        "reminders": [],
+        "settings": {
+            "notify_10_days": True,
+            "notify_3_days": True,
+            "auto_remind": True
+        }
+    }
+    
+    with open(os.path.join(user_folder, "reminders.json"), 'w', encoding='utf-8') as f:
+        json.dump(reminders_template, f, ensure_ascii=False, indent=2)
+    
+    # 4. Шаблон для планирования бюджета
+    budget_template = {
+        "plans": [],
+        "templates": [],
+        "settings": {
+            "default_currency": "Tg",
+            "auto_save": True
+        }
+    }
+    
+    with open(os.path.join(user_folder, "budget_plans.json"), 'w', encoding='utf-8') as f:
+        json.dump(budget_template, f, ensure_ascii=False, indent=2)
+    
+    # 5. Персональный лог файл
+    log_file = os.path.join(user_folder, "logs", f"{username}_bot.log")
+    with open(log_file, 'w', encoding='utf-8') as f:
+        f.write(f"# Лог пользователя {username}\n")
+        f.write(f"# Создан: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+    
+    # 6. README для пользователя
+    readme_content = f"""# Персональная папка пользователя {username}
+
+## Описание
+Эта папка содержит все ваши персональные данные и настройки для работы с финансовым ботом.
+
+## Структура папки
+- `user_config.json` - основные настройки пользователя
+- `user_categories.json` - ваши персональные категории расходов
+- `reminders.json` - ваши напоминания и настройки
+- `budget_plans.json` - планы бюджета и шаблоны
+- `logs/` - папка с логами ваших операций
+- `data/` - папка для экспорта данных
+- `exports/` - папка для отчетов и аналитики
+- `backups/` - папка для резервных копий
+- `templates/` - папка для шаблонов
+
+## Создано
+{datetime.now().strftime('%d.%m.%Y %H:%M:%S')}
+"""
+    
+    with open(os.path.join(user_folder, "README.md"), 'w', encoding='utf-8') as f:
+        f.write(readme_content)
+    
+    logger.info(f"Созданы конфигурационные файлы для пользователя {username} в папке {user_folder}")
+
+def get_user_folder_path(username: str, user_id: int) -> str:
+    """Возвращает путь к папке пользователя"""
+    # Ищем папку пользователя по паттерну
+    users_dir = "users"
+    if not os.path.exists(users_dir):
+        return None
+    
+    for folder in os.listdir(users_dir):
+        if folder.startswith(f"{username}_{user_id}_"):
+            return os.path.join(users_dir, folder)
+    
+    return None
+
+def get_user_config(username: str, user_id: int) -> dict:
+    """Загружает конфигурацию пользователя"""
+    user_folder = get_user_folder_path(username, user_id)
+    if not user_folder:
+        return None
+    
+    config_file = os.path.join(user_folder, "user_config.json")
+    if os.path.exists(config_file):
+        try:
+            with open(config_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Ошибка при загрузке конфигурации пользователя {username}: {e}")
+    
+    return None
+
+# --- СИСТЕМА ИЗОЛЯЦИИ ДАННЫХ ---
+def get_user_data_path(username: str, user_id: int, data_type: str) -> str:
+    """Возвращает путь к данным пользователя определенного типа"""
+    user_folder = get_user_folder_path(username, user_id)
+    if not user_folder:
+        return None
+    
+    data_paths = {
+        "expenses": os.path.join(user_folder, "data", "expenses.json"),
+        "reminders": os.path.join(user_folder, "reminders.json"),
+        "budget_plans": os.path.join(user_folder, "budget_plans.json"),
+        "categories": os.path.join(user_folder, "user_categories.json"),
+        "logs": os.path.join(user_folder, "logs", f"{username}_bot.log"),
+        "exports": os.path.join(user_folder, "exports"),
+        "backups": os.path.join(user_folder, "backups")
+    }
+    
+    return data_paths.get(data_type)
+
+def save_user_data(username: str, user_id: int, data_type: str, data: dict) -> bool:
+    """Сохраняет данные пользователя"""
+    try:
+        data_path = get_user_data_path(username, user_id, data_type)
+        if not data_path:
+            return False
+        
+        # Создаем директорию если не существует
+        os.makedirs(os.path.dirname(data_path), exist_ok=True)
+        
+        with open(data_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        
+        logger.info(f"Данные {data_type} сохранены для пользователя {username}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Ошибка при сохранении данных {data_type} для пользователя {username}: {e}")
+        return False
+
+def load_user_data(username: str, user_id: int, data_type: str) -> dict:
+    """Загружает данные пользователя"""
+    try:
+        data_path = get_user_data_path(username, user_id, data_type)
+        if not data_path or not os.path.exists(data_path):
+            return {}
+        
+        with open(data_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+            
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке данных {data_type} для пользователя {username}: {e}")
+        return {}
+
+def create_user_backup(username: str, user_id: int) -> bool:
+    """Создает резервную копию данных пользователя"""
+    try:
+        user_folder = get_user_folder_path(username, user_id)
+        if not user_folder:
+            return False
+        
+        backup_folder = os.path.join(user_folder, "backups")
+        os.makedirs(backup_folder, exist_ok=True)
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_file = os.path.join(backup_folder, f"backup_{timestamp}.json")
+        
+        # Собираем все данные пользователя
+        backup_data = {
+            "username": username,
+            "user_id": user_id,
+            "backup_date": datetime.now().isoformat(),
+            "data": {
+                "expenses": load_user_data(username, user_id, "expenses"),
+                "reminders": load_user_data(username, user_id, "reminders"),
+                "budget_plans": load_user_data(username, user_id, "budget_plans"),
+                "categories": load_user_data(username, user_id, "categories")
+            }
+        }
+        
+        with open(backup_file, 'w', encoding='utf-8') as f:
+            json.dump(backup_data, f, ensure_ascii=False, indent=2)
+        
+        logger.info(f"Резервная копия создана для пользователя {username}: {backup_file}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Ошибка при создании резервной копии для пользователя {username}: {e}")
+        return False
+
+def restore_user_backup(username: str, user_id: int, backup_file: str) -> bool:
+    """Восстанавливает данные пользователя из резервной копии"""
+    try:
+        if not os.path.exists(backup_file):
+            return False
+        
+        with open(backup_file, 'r', encoding='utf-8') as f:
+            backup_data = json.load(f)
+        
+        # Восстанавливаем данные
+        for data_type, data in backup_data.get("data", {}).items():
+            save_user_data(username, user_id, data_type, data)
+        
+        logger.info(f"Данные восстановлены для пользователя {username} из {backup_file}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Ошибка при восстановлении данных для пользователя {username}: {e}")
+        return False
 
 # --- ФУНКЦИИ УПРАВЛЕНИЯ ГРУППАМИ ---
 def create_group(name: str, admin_user_id: int) -> tuple[bool, str, str]:
