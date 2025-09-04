@@ -3,7 +3,33 @@
     {
       "username": "Айша0312",
       "added_date": "2025-08-24T18:22:40.959656",
-      "status": "active"
+      "status": "active",
+      "role": "user",
+      "folder_name": "default_folder"
+    },
+    {
+      "username": "Тест1",
+      "added_date": "2025-09-04T21:37:00.000000",
+      "status": "active",
+      "role": "moderator",
+      "folder_name": "Тест123",
+      "telegram_id": null
+    },
+    {
+      "username": "Тест2",
+      "added_date": "2025-09-04T21:48:00.000000",
+      "status": "active",
+      "role": "moderator",
+      "folder_name": "Тест234",
+      "telegram_id": null
+    },
+    {
+      "username": "Тест3",
+      "added_date": "2025-09-04T22:00:08.714968",
+      "status": "active",
+      "role": "user",
+      "folder_name": "Тест345",
+      "telegram_id": null
     }
   ],
   "admin": 498410375

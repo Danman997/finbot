@@ -1062,7 +1062,8 @@ async def admin_role_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     
     # Добавляем пользователя
     logger.info(f"Попытка добавить пользователя '{username}' с папкой '{folder_name}' и ролью '{role}'")
-    success, message = add_authorized_user(username, None, folder_name, role)
+    # Используем временный ID 0, который будет обновлен при первом входе пользователя
+    success, message = add_authorized_user(username, 0, folder_name, role)
     
     if success:
         logger.info(f"Пользователь '{username}' успешно добавлен")
@@ -2427,6 +2428,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     user["telegram_id"] = user_id
                     save_authorized_users(users_data)
                     logger.info(f"Обновлен telegram_id для пользователя '{text}': {user_id}")
+                    
+                    # Обновляем данные в базе данных Railway
+                    update_user_telegram_id(text, user_id)
                     break
             
             await update.message.reply_text(
@@ -3847,6 +3851,74 @@ def save_authorized_users(users_data):
         logger.error(f"Ошибка при сохранении пользователей: {e}")
         return False
 
+def update_user_telegram_id(username: str, user_id: int) -> bool:
+    """Обновляет telegram_id пользователя в базе данных"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return False
+        
+        cursor = conn.cursor()
+        
+        # Обновляем user_id в таблице user_folders
+        cursor.execute('''
+            UPDATE user_folders 
+            SET user_id = %s 
+            WHERE username = %s AND (user_id IS NULL OR user_id = 0)
+        ''', (user_id, username))
+        
+        # Создаем категории и настройки для пользователя, если их еще нет
+        if cursor.rowcount > 0:  # Если была обновлена запись
+            # Создаем стандартные категории
+            default_categories = [
+                ("Продукты", ["хлеб", "молоко", "мясо", "овощи", "фрукты"]),
+                ("Транспорт", ["бензин", "такси", "автобус", "метро"]),
+                ("Развлечения", ["кино", "игры", "кафе", "ресторан"]),
+                ("Здоровье", ["лекарства", "врач", "спорт", "аптека"]),
+                ("Одежда", ["рубашка", "джинсы", "обувь", "куртка"]),
+                ("Коммунальные", ["электричество", "вода", "газ", "интернет"]),
+                ("Образование", ["книги", "курсы", "учеба", "тренинги"]),
+                ("Прочее", [])
+            ]
+            
+            for category_name, keywords in default_categories:
+                cursor.execute('''
+                    INSERT INTO user_categories (user_id, category_name, keywords)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (user_id, category_name) DO NOTHING
+                ''', (user_id, category_name, keywords))
+            
+            # Создаем начальные настройки
+            initial_settings = [
+                ("notifications", {"enabled": True, "email": False, "telegram": True}),
+                ("currency", {"code": "Tg", "symbol": "₸"}),
+                ("language", {"code": "ru", "name": "Русский"}),
+                ("backup", {"auto_backup": True, "frequency": "daily"})
+            ]
+            
+            for setting_key, setting_value in initial_settings:
+                cursor.execute('''
+                    INSERT INTO user_settings (user_id, setting_key, setting_value)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (user_id, setting_key) DO NOTHING
+                ''', (user_id, setting_key, json.dumps(setting_value)))
+            
+            # Добавляем лог
+            cursor.execute('''
+                INSERT INTO user_logs (user_id, log_level, message)
+                VALUES (%s, %s, %s)
+            ''', (user_id, "INFO", f"Пользователь {username} привязан к Telegram ID {user_id}"))
+        
+        conn.commit()
+        conn.close()
+        
+        logger.info(f"Обновлен telegram_id для пользователя {username}: {user_id}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Ошибка при обновлении telegram_id для {username}: {e}")
+        return False
+
 def is_user_authorized(user_id: int) -> bool:
     """Проверяет, авторизован ли пользователь"""
     users_data = load_authorized_users()
@@ -3958,7 +4030,7 @@ def create_user_folder(username: str, folder_name: str, user_id: int) -> tuple[b
             DO UPDATE SET folder_name = EXCLUDED.folder_name
         ''', (
             username, 
-            user_id, 
+            user_id if user_id != 0 else None, 
             folder_name, 
             'user',
             json.dumps({
@@ -3988,12 +4060,14 @@ def create_user_folder(username: str, folder_name: str, user_id: int) -> tuple[b
             ("Прочее", [])
         ]
         
-        for category_name, keywords in default_categories:
-            cursor.execute('''
-                INSERT INTO user_categories (user_id, category_name, keywords)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (user_id, category_name) DO NOTHING
-            ''', (user_id, category_name, keywords))
+        # Создаем категории только если user_id не равен 0
+        if user_id != 0:
+            for category_name, keywords in default_categories:
+                cursor.execute('''
+                    INSERT INTO user_categories (user_id, category_name, keywords)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (user_id, category_name) DO NOTHING
+                ''', (user_id, category_name, keywords))
         
         # Создаем начальные настройки
         initial_settings = [
@@ -4003,18 +4077,21 @@ def create_user_folder(username: str, folder_name: str, user_id: int) -> tuple[b
             ("backup", {"auto_backup": True, "frequency": "daily"})
         ]
         
-        for setting_key, setting_value in initial_settings:
-            cursor.execute('''
-                INSERT INTO user_settings (user_id, setting_key, setting_value)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (user_id, setting_key) DO NOTHING
-            ''', (user_id, setting_key, json.dumps(setting_value)))
+        # Создаем настройки только если user_id не равен 0
+        if user_id != 0:
+            for setting_key, setting_value in initial_settings:
+                cursor.execute('''
+                    INSERT INTO user_settings (user_id, setting_key, setting_value)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (user_id, setting_key) DO NOTHING
+                ''', (user_id, setting_key, json.dumps(setting_value)))
         
-        # Добавляем начальный лог
-        cursor.execute('''
-            INSERT INTO user_logs (user_id, log_level, message)
-            VALUES (%s, %s, %s)
-        ''', (user_id, "INFO", f"Пользователь {username} создан с папкой {folder_name}"))
+        # Добавляем начальный лог только если user_id не равен 0
+        if user_id != 0:
+            cursor.execute('''
+                INSERT INTO user_logs (user_id, log_level, message)
+                VALUES (%s, %s, %s)
+            ''', (user_id, "INFO", f"Пользователь {username} создан с папкой {folder_name}"))
         
         conn.commit()
         conn.close()
