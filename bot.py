@@ -382,9 +382,77 @@ def init_db():
         except Exception as e:
             logger.info(f"Столбцы group_id уже существуют или не могут быть добавлены: {e}")
         
+        # Создаем таблицы для системы управления пользователями (Railway/Cloud)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_folders (
+                id SERIAL PRIMARY KEY,
+                username VARCHAR(100) NOT NULL,
+                user_id BIGINT NOT NULL,
+                folder_name VARCHAR(100) NOT NULL,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                role VARCHAR(20) DEFAULT 'user',
+                settings JSONB DEFAULT '{}',
+                permissions JSONB DEFAULT '{}',
+                UNIQUE(username, user_id)
+            )
+        ''')
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_categories (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                category_name VARCHAR(100) NOT NULL,
+                keywords TEXT[] DEFAULT '{}',
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, category_name)
+            )
+        ''')
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_settings (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                setting_key VARCHAR(100) NOT NULL,
+                setting_value JSONB,
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, setting_key)
+            )
+        ''')
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_logs (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                log_level VARCHAR(20) NOT NULL,
+                message TEXT NOT NULL,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_data (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                data_type VARCHAR(50) NOT NULL,
+                data_content JSONB NOT NULL,
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, data_type)
+            )
+        ''')
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_backups (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                backup_name VARCHAR(100) NOT NULL,
+                backup_data JSONB NOT NULL,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
         conn.commit()
         conn.close()
-        logger.info("База данных инициализирована (таблицы 'expenses' и 'payment_reminders' проверены/созданы).")
+        logger.info("База данных инициализирована (все таблицы проверены/созданы).")
 
 def add_expense(amount, category, description, transaction_date, user_id=None):
     conn = get_db_connection()
@@ -3847,13 +3915,12 @@ def add_authorized_user(username: str, user_id: int = None, folder_name: str = N
         logger.info(f"Добавлен новый пользователь: {new_user}")
         
         if save_authorized_users(users_data):
-            # Создаем персональную папку для пользователя
-            if user_id:
-                folder_created, folder_message = create_user_folder(username, folder_name, user_id)
-                if folder_created:
-                    logger.info(f"Персональная папка создана для пользователя {username}")
-                else:
-                    logger.warning(f"Не удалось создать папку для пользователя {username}: {folder_message}")
+            # Создаем персональную папку для пользователя в базе данных
+            folder_created, folder_message = create_user_folder(username, folder_name, user_id)
+            if folder_created:
+                logger.info(f"Персональная папка создана для пользователя {username}")
+            else:
+                logger.warning(f"Не удалось создать папку для пользователя {username}: {folder_message}")
             
             logger.info(f"Пользователь '{username}' успешно сохранен")
             return True, f"Пользователь успешно добавлен с папкой: {folder_name}"
@@ -3881,55 +3948,7 @@ def create_user_folder(username: str, folder_name: str, user_id: int) -> tuple[b
         
         cursor = conn.cursor()
         
-        # Создаем таблицу пользовательских данных, если не существует
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS user_folders (
-                id SERIAL PRIMARY KEY,
-                username VARCHAR(100) NOT NULL,
-                user_id BIGINT NOT NULL,
-                folder_name VARCHAR(100) NOT NULL,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                role VARCHAR(20) DEFAULT 'user',
-                settings JSONB DEFAULT '{}',
-                permissions JSONB DEFAULT '{}',
-                UNIQUE(username, user_id)
-            )
-        ''')
-        
-        # Создаем таблицу для персональных категорий
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS user_categories (
-                id SERIAL PRIMARY KEY,
-                user_id BIGINT NOT NULL,
-                category_name VARCHAR(100) NOT NULL,
-                keywords TEXT[] DEFAULT '{}',
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(user_id, category_name)
-            )
-        ''')
-        
-        # Создаем таблицу для персональных настроек
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS user_settings (
-                id SERIAL PRIMARY KEY,
-                user_id BIGINT NOT NULL,
-                setting_key VARCHAR(100) NOT NULL,
-                setting_value JSONB,
-                updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(user_id, setting_key)
-            )
-        ''')
-        
-        # Создаем таблицу для персональных логов
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS user_logs (
-                id SERIAL PRIMARY KEY,
-                user_id BIGINT NOT NULL,
-                log_level VARCHAR(20) NOT NULL,
-                message TEXT NOT NULL,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
+        # Таблицы уже созданы в init_db(), просто используем их
         
         # Вставляем данные пользователя
         cursor.execute('''
@@ -4081,17 +4100,7 @@ def save_user_data(username: str, user_id: int, data_type: str, data: dict) -> b
         
         cursor = conn.cursor()
         
-        # Создаем таблицу для пользовательских данных, если не существует
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS user_data (
-                id SERIAL PRIMARY KEY,
-                user_id BIGINT NOT NULL,
-                data_type VARCHAR(50) NOT NULL,
-                data_content JSONB NOT NULL,
-                updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(user_id, data_type)
-            )
-        ''')
+        # Таблица user_data уже создана в init_db()
         
         # Сохраняем данные
         cursor.execute('''
@@ -4144,16 +4153,7 @@ def create_user_backup(username: str, user_id: int) -> bool:
         
         cursor = conn.cursor()
         
-        # Создаем таблицу для резервных копий
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS user_backups (
-                id SERIAL PRIMARY KEY,
-                user_id BIGINT NOT NULL,
-                backup_name VARCHAR(100) NOT NULL,
-                backup_data JSONB NOT NULL,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
+        # Таблица user_backups уже создана в init_db()
         
         # Собираем все данные пользователя
         backup_data = {
