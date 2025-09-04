@@ -4023,6 +4023,7 @@ def create_user_folder(username: str, folder_name: str, user_id: int) -> tuple[b
         # Таблицы уже созданы в init_db(), просто используем их
         
         # Вставляем данные пользователя
+        logger.info(f"Создание записи в user_folders: username={username}, user_id={user_id}, folder_name={folder_name}")
         cursor.execute('''
             INSERT INTO user_folders (username, user_id, folder_name, role, settings, permissions)
             VALUES (%s, %s, %s, %s, %s, %s)
@@ -4094,10 +4095,20 @@ def create_user_folder(username: str, folder_name: str, user_id: int) -> tuple[b
             ''', (user_id, "INFO", f"Пользователь {username} создан с папкой {folder_name}"))
         
         conn.commit()
+        
+        # Проверяем, что запись была создана
+        cursor.execute('SELECT COUNT(*) FROM user_folders WHERE username = %s', (username,))
+        count = cursor.fetchone()[0]
+        logger.info(f"Количество записей для пользователя {username}: {count}")
+        
         conn.close()
         
-        logger.info(f"Создана персональная папка в БД для пользователя {username}: {folder_name}")
-        return True, f"Персональная папка создана в облаке: {folder_name}"
+        if count > 0:
+            logger.info(f"Создана персональная папка в БД для пользователя {username}: {folder_name}")
+            return True, f"Персональная папка создана в облаке: {folder_name}"
+        else:
+            logger.error(f"Не удалось создать запись для пользователя {username}")
+            return False, "Ошибка при создании записи в базе данных"
         
     except Exception as e:
         logger.error(f"Ошибка при создании папки пользователя {username}: {e}")
