@@ -1,0 +1,26 @@
+{
+  "plans": [
+    {
+      "id": 1,
+      "month": "2025-09",
+      "total_budget": 100000,
+      "items": [
+        {
+          "category": "Продукты",
+          "amount": 30000,
+          "comment": "Еда на месяц"
+        },
+        {
+          "category": "Транспорт",
+          "amount": 15000,
+          "comment": "Бензин и проезд"
+        }
+      ]
+    }
+  ],
+  "templates": [],
+  "settings": {
+    "default_currency": "Tg",
+    "auto_save": true
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "reminders": [
+    {
+      "id": 1,
+      "title": "Оплата интернета",
+      "description": "Ежемесячная оплата интернета",
+      "amount": 5000,
+      "start_date": "2025-09-01",
+      "end_date": "2025-09-30",
+      "status": "active"
+    }
+  ],
+  "settings": {
+    "notify_10_days": true,
+    "notify_3_days": true,
+    "auto_remind": true
+  }
+}

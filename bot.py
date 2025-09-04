@@ -1022,7 +1022,7 @@ async def admin_role_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     return ConversationHandler.END
 
 async def admin_folder_management(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Управление папками пользователей"""
+    """Управление папками пользователей (из базы данных)"""
     user_id = update.effective_user.id
     
     # Проверяем, является ли пользователь администратором
@@ -1034,41 +1034,58 @@ async def admin_folder_management(update: Update, context: ContextTypes.DEFAULT_
         )
         return
     
-    # Получаем список всех папок пользователей
-    users_dir = "users"
-    if not os.path.exists(users_dir):
+    try:
+        conn = get_db_connection()
+        if not conn:
+            await update.message.reply_text(
+                "❌ Ошибка подключения к базе данных.",
+                reply_markup=get_admin_menu_keyboard()
+            )
+            return
+        
+        cursor = conn.cursor()
+        
+        # Получаем список всех папок пользователей из БД
+        cursor.execute('''
+            SELECT username, user_id, folder_name, role, created_at,
+                   (SELECT COUNT(*) FROM user_data WHERE user_id = uf.user_id) as data_count
+            FROM user_folders uf
+            ORDER BY created_at DESC
+        ''')
+        
+        folders = cursor.fetchall()
+        conn.close()
+        
+        if not folders:
+            await update.message.reply_text(
+                "📁 Папки пользователей не найдены в базе данных.",
+                reply_markup=get_admin_menu_keyboard()
+            )
+            return
+        
+        # Формируем список папок
+        folders_text = "📁 Список папок пользователей (из БД):\n\n"
+        for i, folder in enumerate(folders, 1):
+            username, user_id, folder_name, role, created_at, data_count = folder
+            role_name = USER_ROLES.get(role, role)
+            
+            folders_text += f"{i}. 👤 {username}\n"
+            folders_text += f"   📁 Папка: {folder_name}\n"
+            folders_text += f"   🔧 Роль: {role_name}\n"
+            folders_text += f"   📅 Создана: {created_at.strftime('%d.%m.%Y %H:%M')}\n"
+            folders_text += f"   📊 Данных: {data_count} записей\n\n"
+        
         await update.message.reply_text(
-            "📁 Папка пользователей не найдена.",
+            folders_text,
             reply_markup=get_admin_menu_keyboard()
         )
-        return
-    
-    folders = []
-    for folder in os.listdir(users_dir):
-        if os.path.isdir(os.path.join(users_dir, folder)):
-            folders.append(folder)
-    
-    if not folders:
+        
+    except Exception as e:
+        logger.error(f"Ошибка при получении списка папок: {e}")
         await update.message.reply_text(
-            "📁 Папки пользователей не найдены.",
+            f"❌ Ошибка при получении списка папок: {e}",
             reply_markup=get_admin_menu_keyboard()
         )
-        return
-    
-    # Формируем список папок
-    folders_text = "📁 Список папок пользователей:\n\n"
-    for i, folder in enumerate(folders, 1):
-        folder_path = os.path.join(users_dir, folder)
-        folder_size = sum(os.path.getsize(os.path.join(dirpath, filename))
-                         for dirpath, dirnames, filenames in os.walk(folder_path)
-                         for filename in filenames)
-        folders_text += f"{i}. {folder}\n"
-        folders_text += f"   📊 Размер: {folder_size / 1024:.1f} KB\n\n"
-    
-    await update.message.reply_text(
-        folders_text,
-        reply_markup=get_admin_menu_keyboard()
-    )
 
 async def admin_roles_management(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Управление ролями пользователей"""
@@ -1110,7 +1127,7 @@ async def admin_roles_management(update: Update, context: ContextTypes.DEFAULT_T
     )
 
 async def admin_system_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Статистика системы"""
+    """Статистика системы (из базы данных)"""
     user_id = update.effective_user.id
     
     # Проверяем, является ли пользователь администратором
@@ -1122,50 +1139,80 @@ async def admin_system_stats(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         return
     
-    # Собираем статистику
-    users = get_authorized_users_list()
-    total_users = len(users)
-    active_users = len([u for u in users if u.get('status') == 'active'])
-    
-    # Статистика по ролям
-    role_stats = {}
-    for user in users:
-        role = user.get('role', 'user')
-        role_stats[role] = role_stats.get(role, 0) + 1
-    
-    # Статистика по папкам
-    users_dir = "users"
-    total_folders = 0
-    total_size = 0
-    if os.path.exists(users_dir):
-        for folder in os.listdir(users_dir):
-            folder_path = os.path.join(users_dir, folder)
-            if os.path.isdir(folder_path):
-                total_folders += 1
-                total_size += sum(os.path.getsize(os.path.join(dirpath, filename))
-                                for dirpath, dirnames, filenames in os.walk(folder_path)
-                                for filename in filenames)
-    
-    # Формируем отчет
-    stats_text = "📊 Статистика системы:\n\n"
-    stats_text += f"👥 Пользователи:\n"
-    stats_text += f"   📈 Всего: {total_users}\n"
-    stats_text += f"   ✅ Активных: {active_users}\n"
-    stats_text += f"   ❌ Неактивных: {total_users - active_users}\n\n"
-    
-    stats_text += f"🔧 Роли:\n"
-    for role, count in role_stats.items():
-        role_name = USER_ROLES.get(role, role)
-        stats_text += f"   {role_name}: {count}\n"
-    
-    stats_text += f"\n📁 Папки:\n"
-    stats_text += f"   📂 Всего папок: {total_folders}\n"
-    stats_text += f"   💾 Общий размер: {total_size / 1024 / 1024:.1f} MB\n"
-    
-    await update.message.reply_text(
-        stats_text,
-        reply_markup=get_admin_menu_keyboard()
-    )
+    try:
+        conn = get_db_connection()
+        if not conn:
+            await update.message.reply_text(
+                "❌ Ошибка подключения к базе данных.",
+                reply_markup=get_admin_menu_keyboard()
+            )
+            return
+        
+        cursor = conn.cursor()
+        
+        # Статистика пользователей
+        cursor.execute('SELECT COUNT(*) FROM user_folders')
+        total_folders = cursor.fetchone()[0]
+        
+        cursor.execute('SELECT COUNT(DISTINCT user_id) FROM user_folders')
+        unique_users = cursor.fetchone()[0]
+        
+        # Статистика по ролям
+        cursor.execute('''
+            SELECT role, COUNT(*) 
+            FROM user_folders 
+            GROUP BY role
+        ''')
+        role_stats = dict(cursor.fetchall())
+        
+        # Статистика данных
+        cursor.execute('SELECT COUNT(*) FROM user_data')
+        total_data_records = cursor.fetchone()[0]
+        
+        cursor.execute('SELECT COUNT(*) FROM user_backups')
+        total_backups = cursor.fetchone()[0]
+        
+        # Статистика расходов
+        cursor.execute('SELECT COUNT(*) FROM expenses')
+        total_expenses = cursor.fetchone()[0]
+        
+        # Статистика напоминаний
+        cursor.execute('SELECT COUNT(*) FROM reminders')
+        total_reminders = cursor.fetchone()[0]
+        
+        conn.close()
+        
+        # Формируем отчет
+        stats_text = "📊 Статистика системы (Railway/Cloud):\n\n"
+        stats_text += f"👥 Пользователи:\n"
+        stats_text += f"   📈 Всего папок: {total_folders}\n"
+        stats_text += f"   👤 Уникальных пользователей: {unique_users}\n\n"
+        
+        stats_text += f"🔧 Роли:\n"
+        for role, count in role_stats.items():
+            role_name = USER_ROLES.get(role, role)
+            stats_text += f"   {role_name}: {count}\n"
+        
+        stats_text += f"\n📊 Данные:\n"
+        stats_text += f"   💾 Записей данных: {total_data_records}\n"
+        stats_text += f"   💰 Расходов: {total_expenses}\n"
+        stats_text += f"   ⏰ Напоминаний: {total_reminders}\n"
+        stats_text += f"   💾 Резервных копий: {total_backups}\n\n"
+        
+        stats_text += f"☁️ Платформа: Railway (PostgreSQL)\n"
+        stats_text += f"🕐 Доступность: 24/7\n"
+        
+        await update.message.reply_text(
+            stats_text,
+            reply_markup=get_admin_menu_keyboard()
+        )
+        
+    except Exception as e:
+        logger.error(f"Ошибка при получении статистики: {e}")
+        await update.message.reply_text(
+            f"❌ Ошибка при получении статистики: {e}",
+            reply_markup=get_admin_menu_keyboard()
+        )
 
 # --- ОБРАБОТЧИК АУТЕНТИФИКАЦИИ ---
 async def auth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -3823,192 +3870,241 @@ def get_authorized_users_list() -> list:
     users_data = load_authorized_users()
     return users_data.get("users", [])
 
-# --- ФУНКЦИИ СОЗДАНИЯ ПЕРСОНАЛЬНЫХ ПАПОК ---
+# --- ФУНКЦИИ СОЗДАНИЯ ПЕРСОНАЛЬНЫХ ПАПОК (Railway/Cloud) ---
 def create_user_folder(username: str, folder_name: str, user_id: int) -> tuple[bool, str]:
-    """Создает персональную папку пользователя с необходимыми файлами"""
+    """Создает персональную папку пользователя в базе данных (для Railway)"""
     try:
-        # Создаем основную папку пользователя
-        user_folder = os.path.join("users", f"{username}_{user_id}_{folder_name}")
-        os.makedirs(user_folder, exist_ok=True)
+        # Создаем запись пользователя в базе данных
+        conn = get_db_connection()
+        if not conn:
+            return False, "Ошибка подключения к базе данных"
         
-        # Создаем подпапки
-        subfolders = ["logs", "data", "exports", "backups", "templates"]
-        for subfolder in subfolders:
-            os.makedirs(os.path.join(user_folder, subfolder), exist_ok=True)
+        cursor = conn.cursor()
         
-        # Создаем файлы конфигурации
-        create_user_config_files(user_folder, username, user_id, folder_name)
+        # Создаем таблицу пользовательских данных, если не существует
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_folders (
+                id SERIAL PRIMARY KEY,
+                username VARCHAR(100) NOT NULL,
+                user_id BIGINT NOT NULL,
+                folder_name VARCHAR(100) NOT NULL,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                role VARCHAR(20) DEFAULT 'user',
+                settings JSONB DEFAULT '{}',
+                permissions JSONB DEFAULT '{}',
+                UNIQUE(username, user_id)
+            )
+        ''')
         
-        logger.info(f"Создана персональная папка для пользователя {username}: {user_folder}")
-        return True, f"Персональная папка создана: {folder_name}"
+        # Создаем таблицу для персональных категорий
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_categories (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                category_name VARCHAR(100) NOT NULL,
+                keywords TEXT[] DEFAULT '{}',
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, category_name)
+            )
+        ''')
+        
+        # Создаем таблицу для персональных настроек
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_settings (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                setting_key VARCHAR(100) NOT NULL,
+                setting_value JSONB,
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, setting_key)
+            )
+        ''')
+        
+        # Создаем таблицу для персональных логов
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_logs (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                log_level VARCHAR(20) NOT NULL,
+                message TEXT NOT NULL,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Вставляем данные пользователя
+        cursor.execute('''
+            INSERT INTO user_folders (username, user_id, folder_name, role, settings, permissions)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (username, user_id) 
+            DO UPDATE SET folder_name = EXCLUDED.folder_name
+        ''', (
+            username, 
+            user_id, 
+            folder_name, 
+            'user',
+            json.dumps({
+                "currency": "Tg",
+                "language": "ru", 
+                "notifications": True,
+                "auto_classification": True
+            }),
+            json.dumps({
+                "add_expenses": True,
+                "view_reports": True,
+                "manage_reminders": True,
+                "planning": True,
+                "analytics": True
+            })
+        ))
+        
+        # Создаем стандартные категории для пользователя
+        default_categories = [
+            ("Продукты", ["хлеб", "молоко", "мясо", "овощи", "фрукты"]),
+            ("Транспорт", ["бензин", "такси", "автобус", "метро"]),
+            ("Развлечения", ["кино", "игры", "кафе", "ресторан"]),
+            ("Здоровье", ["лекарства", "врач", "спорт", "аптека"]),
+            ("Одежда", ["рубашка", "джинсы", "обувь", "куртка"]),
+            ("Коммунальные", ["электричество", "вода", "газ", "интернет"]),
+            ("Образование", ["книги", "курсы", "учеба", "тренинги"]),
+            ("Прочее", [])
+        ]
+        
+        for category_name, keywords in default_categories:
+            cursor.execute('''
+                INSERT INTO user_categories (user_id, category_name, keywords)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (user_id, category_name) DO NOTHING
+            ''', (user_id, category_name, keywords))
+        
+        # Создаем начальные настройки
+        initial_settings = [
+            ("notifications", {"enabled": True, "email": False, "telegram": True}),
+            ("currency", {"code": "Tg", "symbol": "₸"}),
+            ("language", {"code": "ru", "name": "Русский"}),
+            ("backup", {"auto_backup": True, "frequency": "daily"})
+        ]
+        
+        for setting_key, setting_value in initial_settings:
+            cursor.execute('''
+                INSERT INTO user_settings (user_id, setting_key, setting_value)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (user_id, setting_key) DO NOTHING
+            ''', (user_id, setting_key, json.dumps(setting_value)))
+        
+        # Добавляем начальный лог
+        cursor.execute('''
+            INSERT INTO user_logs (user_id, log_level, message)
+            VALUES (%s, %s, %s)
+        ''', (user_id, "INFO", f"Пользователь {username} создан с папкой {folder_name}"))
+        
+        conn.commit()
+        conn.close()
+        
+        logger.info(f"Создана персональная папка в БД для пользователя {username}: {folder_name}")
+        return True, f"Персональная папка создана в облаке: {folder_name}"
         
     except Exception as e:
         logger.error(f"Ошибка при создании папки пользователя {username}: {e}")
         return False, f"Ошибка при создании папки: {e}"
 
-def create_user_config_files(user_folder: str, username: str, user_id: int, folder_name: str):
-    """Создает необходимые конфигурационные файлы для пользователя"""
-    
-    # 1. Персональный конфиг пользователя
-    user_config = {
-        "username": username,
-        "user_id": user_id,
-        "folder_name": folder_name,
-        "created_at": datetime.now().isoformat(),
-        "role": "user",
-        "settings": {
-            "currency": "Tg",
-            "language": "ru",
-            "notifications": True,
-            "auto_classification": True
-        },
-        "permissions": {
-            "add_expenses": True,
-            "view_reports": True,
-            "manage_reminders": True,
-            "planning": True,
-            "analytics": True
-        }
-    }
-    
-    with open(os.path.join(user_folder, "user_config.json"), 'w', encoding='utf-8') as f:
-        json.dump(user_config, f, ensure_ascii=False, indent=2)
-    
-    # 2. Персональные категории пользователя
-    user_categories = {
-        "Продукты": [],
-        "Транспорт": [],
-        "Развлечения": [],
-        "Здоровье": [],
-        "Одежда": [],
-        "Коммунальные": [],
-        "Образование": [],
-        "Прочее": []
-    }
-    
-    with open(os.path.join(user_folder, "user_categories.json"), 'w', encoding='utf-8') as f:
-        json.dump(user_categories, f, ensure_ascii=False, indent=2)
-    
-    # 3. Шаблон для персональных напоминаний
-    reminders_template = {
-        "reminders": [],
-        "settings": {
-            "notify_10_days": True,
-            "notify_3_days": True,
-            "auto_remind": True
-        }
-    }
-    
-    with open(os.path.join(user_folder, "reminders.json"), 'w', encoding='utf-8') as f:
-        json.dump(reminders_template, f, ensure_ascii=False, indent=2)
-    
-    # 4. Шаблон для планирования бюджета
-    budget_template = {
-        "plans": [],
-        "templates": [],
-        "settings": {
-            "default_currency": "Tg",
-            "auto_save": True
-        }
-    }
-    
-    with open(os.path.join(user_folder, "budget_plans.json"), 'w', encoding='utf-8') as f:
-        json.dump(budget_template, f, ensure_ascii=False, indent=2)
-    
-    # 5. Персональный лог файл
-    log_file = os.path.join(user_folder, "logs", f"{username}_bot.log")
-    with open(log_file, 'w', encoding='utf-8') as f:
-        f.write(f"# Лог пользователя {username}\n")
-        f.write(f"# Создан: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-    
-    # 6. README для пользователя
-    readme_content = f"""# Персональная папка пользователя {username}
+# Функция create_user_config_files удалена - теперь используется база данных
 
-## Описание
-Эта папка содержит все ваши персональные данные и настройки для работы с финансовым ботом.
-
-## Структура папки
-- `user_config.json` - основные настройки пользователя
-- `user_categories.json` - ваши персональные категории расходов
-- `reminders.json` - ваши напоминания и настройки
-- `budget_plans.json` - планы бюджета и шаблоны
-- `logs/` - папка с логами ваших операций
-- `data/` - папка для экспорта данных
-- `exports/` - папка для отчетов и аналитики
-- `backups/` - папка для резервных копий
-- `templates/` - папка для шаблонов
-
-## Создано
-{datetime.now().strftime('%d.%m.%Y %H:%M:%S')}
-"""
-    
-    with open(os.path.join(user_folder, "README.md"), 'w', encoding='utf-8') as f:
-        f.write(readme_content)
-    
-    logger.info(f"Созданы конфигурационные файлы для пользователя {username} в папке {user_folder}")
-
-def get_user_folder_path(username: str, user_id: int) -> str:
-    """Возвращает путь к папке пользователя"""
-    # Ищем папку пользователя по паттерну
-    users_dir = "users"
-    if not os.path.exists(users_dir):
+def get_user_folder_info(username: str, user_id: int) -> dict:
+    """Возвращает информацию о папке пользователя из базы данных"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return None
+        
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT username, user_id, folder_name, role, settings, permissions, created_at
+            FROM user_folders 
+            WHERE username = %s AND user_id = %s
+        ''', (username, user_id))
+        
+        result = cursor.fetchone()
+        conn.close()
+        
+        if result:
+            return {
+                "username": result[0],
+                "user_id": result[1],
+                "folder_name": result[2],
+                "role": result[3],
+                "settings": result[4] if result[4] else {},
+                "permissions": result[5] if result[5] else {},
+                "created_at": result[6]
+            }
         return None
-    
-    for folder in os.listdir(users_dir):
-        if folder.startswith(f"{username}_{user_id}_"):
-            return os.path.join(users_dir, folder)
-    
-    return None
+        
+    except Exception as e:
+        logger.error(f"Ошибка при получении информации о папке пользователя {username}: {e}")
+        return None
 
 def get_user_config(username: str, user_id: int) -> dict:
-    """Загружает конфигурацию пользователя"""
-    user_folder = get_user_folder_path(username, user_id)
-    if not user_folder:
-        return None
-    
-    config_file = os.path.join(user_folder, "user_config.json")
-    if os.path.exists(config_file):
-        try:
-            with open(config_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception as e:
-            logger.error(f"Ошибка при загрузке конфигурации пользователя {username}: {e}")
-    
-    return None
-
-# --- СИСТЕМА ИЗОЛЯЦИИ ДАННЫХ ---
-def get_user_data_path(username: str, user_id: int, data_type: str) -> str:
-    """Возвращает путь к данным пользователя определенного типа"""
-    user_folder = get_user_folder_path(username, user_id)
-    if not user_folder:
-        return None
-    
-    data_paths = {
-        "expenses": os.path.join(user_folder, "data", "expenses.json"),
-        "reminders": os.path.join(user_folder, "reminders.json"),
-        "budget_plans": os.path.join(user_folder, "budget_plans.json"),
-        "categories": os.path.join(user_folder, "user_categories.json"),
-        "logs": os.path.join(user_folder, "logs", f"{username}_bot.log"),
-        "exports": os.path.join(user_folder, "exports"),
-        "backups": os.path.join(user_folder, "backups")
-    }
-    
-    return data_paths.get(data_type)
-
-def save_user_data(username: str, user_id: int, data_type: str, data: dict) -> bool:
-    """Сохраняет данные пользователя"""
+    """Загружает конфигурацию пользователя из базы данных"""
     try:
-        data_path = get_user_data_path(username, user_id, data_type)
-        if not data_path:
+        conn = get_db_connection()
+        if not conn:
+            return None
+        
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT settings, permissions, role
+            FROM user_folders 
+            WHERE username = %s AND user_id = %s
+        ''', (username, user_id))
+        
+        result = cursor.fetchone()
+        conn.close()
+        
+        if result:
+            return {
+                "settings": result[0] if result[0] else {},
+                "permissions": result[1] if result[1] else {},
+                "role": result[2] if result[2] else "user"
+            }
+        return None
+        
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке конфигурации пользователя {username}: {e}")
+        return None
+
+# --- СИСТЕМА ИЗОЛЯЦИИ ДАННЫХ (Railway/Cloud) ---
+def save_user_data(username: str, user_id: int, data_type: str, data: dict) -> bool:
+    """Сохраняет данные пользователя в базе данных"""
+    try:
+        conn = get_db_connection()
+        if not conn:
             return False
         
-        # Создаем директорию если не существует
-        os.makedirs(os.path.dirname(data_path), exist_ok=True)
+        cursor = conn.cursor()
         
-        with open(data_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        # Создаем таблицу для пользовательских данных, если не существует
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_data (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                data_type VARCHAR(50) NOT NULL,
+                data_content JSONB NOT NULL,
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, data_type)
+            )
+        ''')
         
-        logger.info(f"Данные {data_type} сохранены для пользователя {username}")
+        # Сохраняем данные
+        cursor.execute('''
+            INSERT INTO user_data (user_id, data_type, data_content)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (user_id, data_type) 
+            DO UPDATE SET data_content = EXCLUDED.data_content, updated_at = CURRENT_TIMESTAMP
+        ''', (user_id, data_type, json.dumps(data)))
+        
+        conn.commit()
+        conn.close()
+        
+        logger.info(f"Данные {data_type} сохранены для пользователя {username} в БД")
         return True
         
     except Exception as e:
@@ -4016,31 +4112,48 @@ def save_user_data(username: str, user_id: int, data_type: str, data: dict) -> b
         return False
 
 def load_user_data(username: str, user_id: int, data_type: str) -> dict:
-    """Загружает данные пользователя"""
+    """Загружает данные пользователя из базы данных"""
     try:
-        data_path = get_user_data_path(username, user_id, data_type)
-        if not data_path or not os.path.exists(data_path):
+        conn = get_db_connection()
+        if not conn:
             return {}
         
-        with open(data_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-            
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT data_content FROM user_data 
+            WHERE user_id = %s AND data_type = %s
+        ''', (user_id, data_type))
+        
+        result = cursor.fetchone()
+        conn.close()
+        
+        if result and result[0]:
+            return result[0]
+        return {}
+        
     except Exception as e:
         logger.error(f"Ошибка при загрузке данных {data_type} для пользователя {username}: {e}")
         return {}
 
 def create_user_backup(username: str, user_id: int) -> bool:
-    """Создает резервную копию данных пользователя"""
+    """Создает резервную копию данных пользователя в базе данных"""
     try:
-        user_folder = get_user_folder_path(username, user_id)
-        if not user_folder:
+        conn = get_db_connection()
+        if not conn:
             return False
         
-        backup_folder = os.path.join(user_folder, "backups")
-        os.makedirs(backup_folder, exist_ok=True)
+        cursor = conn.cursor()
         
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_file = os.path.join(backup_folder, f"backup_{timestamp}.json")
+        # Создаем таблицу для резервных копий
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_backups (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                backup_name VARCHAR(100) NOT NULL,
+                backup_data JSONB NOT NULL,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
         
         # Собираем все данные пользователя
         backup_data = {
@@ -4051,39 +4164,82 @@ def create_user_backup(username: str, user_id: int) -> bool:
                 "expenses": load_user_data(username, user_id, "expenses"),
                 "reminders": load_user_data(username, user_id, "reminders"),
                 "budget_plans": load_user_data(username, user_id, "budget_plans"),
-                "categories": load_user_data(username, user_id, "categories")
+                "categories": load_user_data(username, user_id, "categories"),
+                "settings": load_user_data(username, user_id, "settings")
             }
         }
         
-        with open(backup_file, 'w', encoding='utf-8') as f:
-            json.dump(backup_data, f, ensure_ascii=False, indent=2)
+        # Сохраняем резервную копию
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_name = f"backup_{timestamp}"
         
-        logger.info(f"Резервная копия создана для пользователя {username}: {backup_file}")
+        cursor.execute('''
+            INSERT INTO user_backups (user_id, backup_name, backup_data)
+            VALUES (%s, %s, %s)
+        ''', (user_id, backup_name, json.dumps(backup_data)))
+        
+        conn.commit()
+        conn.close()
+        
+        logger.info(f"Резервная копия создана для пользователя {username} в БД: {backup_name}")
         return True
         
     except Exception as e:
         logger.error(f"Ошибка при создании резервной копии для пользователя {username}: {e}")
         return False
 
-def restore_user_backup(username: str, user_id: int, backup_file: str) -> bool:
-    """Восстанавливает данные пользователя из резервной копии"""
+def restore_user_backup(username: str, user_id: int, backup_id: int) -> bool:
+    """Восстанавливает данные пользователя из резервной копии в базе данных"""
     try:
-        if not os.path.exists(backup_file):
+        conn = get_db_connection()
+        if not conn:
             return False
         
-        with open(backup_file, 'r', encoding='utf-8') as f:
-            backup_data = json.load(f)
+        cursor = conn.cursor()
+        
+        # Получаем резервную копию
+        cursor.execute('''
+            SELECT backup_data FROM user_backups 
+            WHERE id = %s AND user_id = %s
+        ''', (backup_id, user_id))
+        
+        result = cursor.fetchone()
+        if not result:
+            return False
+        
+        backup_data = result[0]
         
         # Восстанавливаем данные
         for data_type, data in backup_data.get("data", {}).items():
             save_user_data(username, user_id, data_type, data)
         
-        logger.info(f"Данные восстановлены для пользователя {username} из {backup_file}")
+        conn.close()
+        
+        logger.info(f"Данные восстановлены для пользователя {username} из резервной копии {backup_id}")
         return True
         
     except Exception as e:
         logger.error(f"Ошибка при восстановлении данных для пользователя {username}: {e}")
         return False
+
+def log_user_action(user_id: int, action: str, details: str = "") -> None:
+    """Логирует действие пользователя в базу данных"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return
+        
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO user_logs (user_id, log_level, message)
+            VALUES (%s, %s, %s)
+        ''', (user_id, "INFO", f"{action}: {details}"))
+        
+        conn.commit()
+        conn.close()
+        
+    except Exception as e:
+        logger.error(f"Ошибка при логировании действия пользователя {user_id}: {e}")
 
 # --- ФУНКЦИИ УПРАВЛЕНИЯ ГРУППАМИ ---
 def create_group(name: str, admin_user_id: int) -> tuple[bool, str, str]:
