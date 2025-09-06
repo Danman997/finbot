@@ -387,7 +387,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS user_folders (
                 id SERIAL PRIMARY KEY,
                 username VARCHAR(100) NOT NULL,
-                user_id BIGINT NOT NULL,
+                user_id BIGINT,
                 folder_name VARCHAR(100) NOT NULL,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                 role VARCHAR(20) DEFAULT 'user',
@@ -400,7 +400,7 @@ def init_db():
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS user_categories (
                 id SERIAL PRIMARY KEY,
-                user_id BIGINT NOT NULL,
+                user_id BIGINT,
                 category_name VARCHAR(100) NOT NULL,
                 keywords TEXT[] DEFAULT '{}',
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -411,7 +411,7 @@ def init_db():
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS user_settings (
                 id SERIAL PRIMARY KEY,
-                user_id BIGINT NOT NULL,
+                user_id BIGINT,
                 setting_key VARCHAR(100) NOT NULL,
                 setting_value JSONB,
                 updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -422,7 +422,7 @@ def init_db():
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS user_logs (
                 id SERIAL PRIMARY KEY,
-                user_id BIGINT NOT NULL,
+                user_id BIGINT,
                 log_level VARCHAR(20) NOT NULL,
                 message TEXT NOT NULL,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -1864,11 +1864,48 @@ async def reminder_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         
         reminders_text += f"💰 Общая сумма к оплате: {total_amount:.2f} Тг"
         
+        # Добавляем кнопки управления
+        keyboard = [
+            ["✏️ Редактировать напоминание", "🗑️ Удалить напоминание"],
+            ["🔙 Назад"]
+        ]
+        
         await update.message.reply_text(
             reminders_text,
-            reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         )
+        
+        # Сохраняем список напоминаний в контексте для последующего выбора
+        context.user_data['reminders_list'] = reminders
         return REMINDER_MENU_STATE
+    
+    elif text == "✏️ Редактировать напоминание":
+        reminders = context.user_data.get('reminders_list', [])
+        if not reminders:
+            await update.message.reply_text(
+                "Список напоминаний не найден. Попробуйте сначала открыть список напоминаний.",
+                reply_markup=get_main_menu_keyboard()
+            )
+            return ConversationHandler.END
+        
+        # Показываем список для выбора
+        reminders_text = "✏️ Выберите напоминание для редактирования:\n\n"
+        keyboard = []
+        
+        for i, (rem_id, title, desc, amount, start_date, end_date, sent_10, sent_3, created) in enumerate(reminders, 1):
+            days_left = (end_date - datetime.now().date()).days
+            status = "🟢" if days_left > 0 else "🔴"
+            
+            reminders_text += f"{i}. {status} {title} - {amount:.2f} Тг\n"
+            keyboard.append([KeyboardButton(f"✏️ {i}. {title}")])
+        
+        keyboard.append([KeyboardButton("🔙 Назад")])
+        
+        await update.message.reply_text(
+            reminders_text,
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+        return REMINDER_EDIT_CHOICE_STATE
     
     elif text == "🗑️ Удалить напоминание":
         reminders = get_all_active_reminders()
@@ -1904,6 +1941,203 @@ async def reminder_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         return ConversationHandler.END
     
     return REMINDER_MENU_STATE
+
+async def reminder_edit_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка выбора напоминания для редактирования"""
+    text = update.message.text
+    
+    if text == "🔙 Назад":
+        await update.message.reply_text(
+            "Выберите действие для напоминаний:",
+            reply_markup=ReplyKeyboardMarkup([
+                ["📝 Добавить напоминание", "📋 Список напоминаний"], 
+                ["🗑️ Удалить напоминание", "🔙 Назад"]
+            ], resize_keyboard=True)
+        )
+        return REMINDER_MENU_STATE
+    
+    # Парсим выбор пользователя
+    if text.startswith("✏️ "):
+        try:
+            # Извлекаем номер из текста "✏️ 1. Название"
+            choice_num = int(text.split(".")[0].split()[-1]) - 1
+            reminders = context.user_data.get('reminders_list', [])
+            
+            if 0 <= choice_num < len(reminders):
+                selected_reminder = reminders[choice_num]
+                context.user_data['editing_reminder'] = selected_reminder
+                
+                rem_id, title, desc, amount, start_date, end_date, sent_10, sent_3, created = selected_reminder
+                
+                await update.message.reply_text(
+                    f"✏️ Редактирование напоминания:\n\n"
+                    f"📝 Текущее название: {title}\n"
+                    f"📄 Описание: {desc or 'Не указано'}\n"
+                    f"💰 Сумма: {amount:.2f} Тг\n"
+                    f"📅 Период: {start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')}\n\n"
+                    f"Введите новое название (или отправьте текущее без изменений):",
+                    reply_markup=ReplyKeyboardRemove()
+                )
+                return REMINDER_EDIT_TITLE_STATE
+            else:
+                await update.message.reply_text(
+                    "❌ Неверный выбор. Попробуйте снова.",
+                    reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+                )
+                return REMINDER_EDIT_CHOICE_STATE
+        except (ValueError, IndexError):
+            await update.message.reply_text(
+                "❌ Неверный формат. Попробуйте снова.",
+                reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+            )
+            return REMINDER_EDIT_CHOICE_STATE
+    
+    return REMINDER_EDIT_CHOICE_STATE
+
+async def reminder_edit_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Редактирование названия напоминания"""
+    new_title = update.message.text.strip()
+    if not new_title:
+        await update.message.reply_text(
+            "Название не может быть пустым. Введите новое название:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return REMINDER_EDIT_TITLE_STATE
+    
+    context.user_data['new_title'] = new_title
+    
+    selected_reminder = context.user_data.get('editing_reminder')
+    rem_id, title, desc, amount, start_date, end_date, sent_10, sent_3, created = selected_reminder
+    
+    await update.message.reply_text(
+        f"📝 Новое название: {new_title}\n\n"
+        f"Введите новое описание (или '-' для удаления, или отправьте текущее без изменений):",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return REMINDER_EDIT_DESC_STATE
+
+async def reminder_edit_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Редактирование описания напоминания"""
+    new_desc = update.message.text.strip()
+    if new_desc == '-':
+        new_desc = None
+    
+    context.user_data['new_desc'] = new_desc
+    
+    selected_reminder = context.user_data.get('editing_reminder')
+    rem_id, title, desc, amount, start_date, end_date, sent_10, sent_3, created = selected_reminder
+    
+    await update.message.reply_text(
+        f"📄 Новое описание: {new_desc or 'Не указано'}\n\n"
+        f"Введите новую сумму (или отправьте текущую без изменений):",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return REMINDER_EDIT_AMOUNT_STATE
+
+async def reminder_edit_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Редактирование суммы напоминания"""
+    try:
+        new_amount = float(update.message.text.replace(',', '.'))
+        if new_amount <= 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Неверная сумма. Введите положительное число:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return REMINDER_EDIT_AMOUNT_STATE
+    
+    context.user_data['new_amount'] = new_amount
+    
+    selected_reminder = context.user_data.get('editing_reminder')
+    rem_id, title, desc, amount, start_date, end_date, sent_10, sent_3, created = selected_reminder
+    
+    await update.message.reply_text(
+        f"💰 Новая сумма: {new_amount:.2f} Тг\n\n"
+        f"Введите новые даты в формате ДД.ММ.ГГГГ - ДД.ММ.ГГГГ\n"
+        f"Текущий период: {start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')}\n"
+        f"Или отправьте текущий период без изменений:",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return REMINDER_EDIT_DATES_STATE
+
+async def reminder_edit_dates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Редактирование дат напоминания"""
+    dates_text = update.message.text.strip()
+    
+    try:
+        if ' - ' in dates_text:
+            start_str, end_str = dates_text.split(' - ')
+            new_start_date = datetime.strptime(start_str.strip(), '%d.%m.%Y').date()
+            new_end_date = datetime.strptime(end_str.strip(), '%d.%m.%Y').date()
+        else:
+            # Если пользователь отправил текущие даты без изменений
+            selected_reminder = context.user_data.get('editing_reminder')
+            rem_id, title, desc, amount, start_date, end_date, sent_10, sent_3, created = selected_reminder
+            new_start_date = start_date
+            new_end_date = end_date
+        
+        if new_start_date >= new_end_date:
+            raise ValueError("Дата начала должна быть раньше даты окончания")
+            
+    except ValueError as e:
+        await update.message.reply_text(
+            f"❌ Неверный формат дат. {str(e)}\n"
+            f"Введите даты в формате ДД.ММ.ГГГГ - ДД.ММ.ГГГГ:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return REMINDER_EDIT_DATES_STATE
+    
+    # Сохраняем изменения в базу данных
+    selected_reminder = context.user_data.get('editing_reminder')
+    rem_id, title, desc, amount, start_date, end_date, sent_10, sent_3, created = selected_reminder
+    
+    new_title = context.user_data.get('new_title', title)
+    new_desc = context.user_data.get('new_desc', desc)
+    new_amount = context.user_data.get('new_amount', amount)
+    
+    # Обновляем напоминание в базе данных
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE payment_reminders 
+                SET title = %s, description = %s, amount = %s, 
+                    start_date = %s, end_date = %s, sent_10_days = FALSE, sent_3_days = FALSE
+                WHERE id = %s
+            ''', (new_title, new_desc, new_amount, new_start_date, new_end_date, rem_id))
+            conn.commit()
+            
+            await update.message.reply_text(
+                f"✅ Напоминание успешно обновлено!\n\n"
+                f"📝 Название: {new_title}\n"
+                f"📄 Описание: {new_desc or 'Не указано'}\n"
+                f"💰 Сумма: {new_amount:.2f} Тг\n"
+                f"📅 Период: {new_start_date.strftime('%d.%m.%Y')} - {new_end_date.strftime('%d.%m.%Y')}",
+                reply_markup=get_main_menu_keyboard()
+            )
+        except Exception as e:
+            logger.error(f"Ошибка при обновлении напоминания: {e}")
+            await update.message.reply_text(
+                "❌ Ошибка при обновлении напоминания. Попробуйте снова.",
+                reply_markup=get_main_menu_keyboard()
+            )
+        finally:
+            conn.close()
+    else:
+        await update.message.reply_text(
+            "❌ Ошибка подключения к базе данных.",
+            reply_markup=get_main_menu_keyboard()
+        )
+    
+    # Очищаем контекст
+    context.user_data.pop('editing_reminder', None)
+    context.user_data.pop('new_title', None)
+    context.user_data.pop('new_desc', None)
+    context.user_data.pop('new_amount', None)
+    
+    return ConversationHandler.END
 
 async def reminder_title_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обработка ввода названия напоминания"""
@@ -2545,6 +2779,11 @@ REMINDER_START_DATE_STATE = 13
 REMINDER_END_DATE_STATE = 14
 REMINDER_MANAGE_STATE = 15
 REMINDER_DELETE_STATE = 16
+REMINDER_EDIT_CHOICE_STATE = 17
+REMINDER_EDIT_TITLE_STATE = 18
+REMINDER_EDIT_DESC_STATE = 19
+REMINDER_EDIT_AMOUNT_STATE = 20
+REMINDER_EDIT_DATES_STATE = 21
 
 # --- Доп. состояния для планирования бюджета ---
 PLAN_MENU_STATE = 22
@@ -2555,6 +2794,12 @@ PLAN_AMOUNT_STATE = 26
 PLAN_COMMENT_STATE = 27
 PLAN_SUMMARY_STATE = 28
 PLAN_DELETE_STATE = 29
+PLAN_EDIT_CHOICE_STATE = 33
+PLAN_EDIT_MONTH_STATE = 34
+PLAN_EDIT_TOTAL_STATE = 35
+PLAN_EDIT_CATEGORY_STATE = 36
+PLAN_EDIT_AMOUNT_STATE = 37
+PLAN_EDIT_COMMENT_STATE = 38
 
 # --- Состояния для аналитики ---
 ANALYTICS_MENU_STATE = 30
@@ -2904,7 +3149,7 @@ def main():
         ],
         states={
             REMINDER_MENU_STATE: [
-                MessageHandler(filters.Regex("^(📝 Добавить напоминание|📋 Список напоминаний|🗑️ Удалить напоминание|🔙 Назад)$"), reminder_menu),
+                MessageHandler(filters.Regex("^(📝 Добавить напоминание|📋 Список напоминаний|🗑️ Удалить напоминание|✏️ Редактировать напоминание|🔙 Назад)$"), reminder_menu),
                 MessageHandler(filters.Regex("^⏰ Напоминания$"), reminder_menu)
             ],
             REMINDER_TITLE_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_title_input)],
@@ -2914,6 +3159,11 @@ def main():
             REMINDER_END_DATE_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_end_date_input)],
             REMINDER_MANAGE_STATE: [MessageHandler(filters.Regex("^(❌ Удалить \d+|🔙 Назад)$"), reminder_manage)],
             REMINDER_DELETE_STATE: [MessageHandler(filters.Regex("^(❌ Удалить \d+|🔙 Назад)$"), reminder_delete_confirm)],
+            REMINDER_EDIT_CHOICE_STATE: [MessageHandler(filters.Regex("^(✏️ \d+\.|🔙 Назад)$"), reminder_edit_choice)],
+            REMINDER_EDIT_TITLE_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_edit_title)],
+            REMINDER_EDIT_DESC_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_edit_desc)],
+            REMINDER_EDIT_AMOUNT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_edit_amount)],
+            REMINDER_EDIT_DATES_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_edit_dates)],
         },
         fallbacks=[CommandHandler("start", start)],
         allow_reentry=True
@@ -2927,7 +3177,7 @@ def main():
         ],
         states={
             PLAN_MENU_STATE: [
-                MessageHandler(filters.Regex("^(➕ Добавить планирование|📋 Список планов|🗑️ Удалить план|🔙 Назад)$"), planning_menu),
+                MessageHandler(filters.Regex("^(➕ Добавить планирование|📋 Список планов|🗑️ Удалить план|✏️ Редактировать план|🔙 Назад)$"), planning_menu),
                 MessageHandler(filters.Regex("^📅 Планирование$"), planning_menu),
                 MessageHandler(filters.Regex("^.* — .*$"), planning_menu)  # Обработка выбора месяца
             ],
@@ -2937,6 +3187,12 @@ def main():
             PLAN_AMOUNT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_amount)],
             PLAN_COMMENT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_comment)],
             PLAN_DELETE_STATE: [MessageHandler(filters.Regex("^(❌ Удалить план \d+|🔙 Назад)$"), planning_delete_confirm)],
+            PLAN_EDIT_CHOICE_STATE: [MessageHandler(filters.Regex("^(✏️ \d+\.|🔙 Назад)$"), planning_edit_choice)],
+            PLAN_EDIT_MONTH_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_edit_month)],
+            PLAN_EDIT_TOTAL_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_edit_total)],
+            PLAN_EDIT_CATEGORY_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_edit_category)],
+            PLAN_EDIT_AMOUNT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_edit_amount)],
+            PLAN_EDIT_COMMENT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, custom_category_input)],
             CUSTOM_CATEGORY_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, custom_category_input)],
         },
         fallbacks=[CommandHandler("start", start)],
@@ -3301,11 +3557,41 @@ async def planning_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             label = f"{pm.strftime('%m.%Y')} — {float(total):.0f}"
             text_lines.append(f"{i}. {label}")
             kb.append([KeyboardButton(label)])
+        
+        # Добавляем кнопки управления
+        kb.append([KeyboardButton("✏️ Редактировать план"), KeyboardButton("🗑️ Удалить план")])
         kb.append([KeyboardButton("🔙 Назад")])
+        
         await update.message.reply_text("\n".join(text_lines), reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
         # Сохраняем планы в контексте для последующего выбора
         context.user_data['plans_list'] = rows
         return PLAN_MENU_STATE
+    
+    elif text == "✏️ Редактировать план":
+        plans = context.user_data.get('plans_list', [])
+        if not plans:
+            await update.message.reply_text(
+                "Список планов не найден. Попробуйте сначала открыть список планов.",
+                reply_markup=get_main_menu_keyboard()
+            )
+            return ConversationHandler.END
+        
+        # Показываем список для выбора
+        plans_text = "✏️ Выберите план для редактирования:\n\n"
+        keyboard = []
+        
+        for i, (pm, total, pid) in enumerate(plans, 1):
+            plans_text += f"{i}. {pm.strftime('%m.%Y')} — {float(total):.0f} Тг\n"
+            keyboard.append([KeyboardButton(f"✏️ {i}. {pm.strftime('%m.%Y')}")])
+        
+        keyboard.append([KeyboardButton("🔙 Назад")])
+        
+        await update.message.reply_text(
+            plans_text,
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+        return PLAN_EDIT_CHOICE_STATE
+    
     elif text == "🗑️ Удалить план":
         return await planning_delete_start(update, context)
     elif text == "🔙 Назад":
@@ -3374,6 +3660,299 @@ async def reminder_delete_confirm(update: Update, context: ContextTypes.DEFAULT_
         "❌ Неверный выбор. Попробуйте снова.",
         reply_markup=get_main_menu_keyboard()
     )
+    return ConversationHandler.END
+
+async def planning_edit_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка выбора плана для редактирования"""
+    text = update.message.text
+    
+    if text == "🔙 Назад":
+        await update.message.reply_text(
+            "Выберите действие:",
+            reply_markup=ReplyKeyboardMarkup([["➕ Добавить планирование", "📋 Список планов"], ["🗑️ Удалить план", "🔙 Назад"]], resize_keyboard=True)
+        )
+        return PLAN_MENU_STATE
+    
+    # Парсим выбор пользователя
+    if text.startswith("✏️ "):
+        try:
+            # Извлекаем номер из текста "✏️ 1. ММ.ГГГГ"
+            choice_num = int(text.split(".")[0].split()[-1]) - 1
+            plans = context.user_data.get('plans_list', [])
+            
+            if 0 <= choice_num < len(plans):
+                selected_plan = plans[choice_num]
+                context.user_data['editing_plan'] = selected_plan
+                
+                pm, total, pid = selected_plan
+                
+                await update.message.reply_text(
+                    f"✏️ Редактирование плана:\n\n"
+                    f"📅 Месяц: {pm.strftime('%m.%Y')}\n"
+                    f"💰 Общая сумма: {float(total):.2f} Тг\n\n"
+                    f"Введите новый месяц в формате ММ.ГГГГ (или отправьте текущий без изменений):",
+                    reply_markup=ReplyKeyboardRemove()
+                )
+                return PLAN_EDIT_MONTH_STATE
+            else:
+                await update.message.reply_text(
+                    "❌ Неверный выбор. Попробуйте снова.",
+                    reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+                )
+                return PLAN_EDIT_CHOICE_STATE
+        except (ValueError, IndexError):
+            await update.message.reply_text(
+                "❌ Неверный формат. Попробуйте снова.",
+                reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+            )
+            return PLAN_EDIT_CHOICE_STATE
+    
+    return PLAN_EDIT_CHOICE_STATE
+
+async def planning_edit_month(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Редактирование месяца плана"""
+    text = update.message.text.strip()
+    
+    try:
+        if text and text != context.user_data.get('editing_plan', [None])[0].strftime('%m.%Y'):
+            # Пользователь ввел новый месяц
+            new_month = datetime.strptime(f"01.{text}", "%d.%m.%Y").date()
+        else:
+            # Пользователь оставил текущий месяц
+            selected_plan = context.user_data.get('editing_plan')
+            pm, total, pid = selected_plan
+            new_month = pm
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Неверный формат. Введите месяц в виде ММ.ГГГГ:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return PLAN_EDIT_MONTH_STATE
+    
+    context.user_data['new_plan_month'] = new_month
+    
+    selected_plan = context.user_data.get('editing_plan')
+    pm, total, pid = selected_plan
+    
+    await update.message.reply_text(
+        f"📅 Новый месяц: {new_month.strftime('%m.%Y')}\n\n"
+        f"Введите новую общую сумму бюджета (или отправьте текущую без изменений):",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return PLAN_EDIT_TOTAL_STATE
+
+async def planning_edit_total(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Редактирование общей суммы плана"""
+    text = update.message.text.strip()
+    
+    try:
+        if text:
+            new_total = float(text.replace(',', '.'))
+            if new_total <= 0:
+                raise ValueError
+        else:
+            # Пользователь оставил текущую сумму
+            selected_plan = context.user_data.get('editing_plan')
+            pm, total, pid = selected_plan
+            new_total = float(total)
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Введите положительное число для общего бюджета:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return PLAN_EDIT_TOTAL_STATE
+    
+    context.user_data['new_plan_total'] = new_total
+    
+    # Загружаем текущие категории плана
+    selected_plan = context.user_data.get('editing_plan')
+    pm, total, pid = selected_plan
+    
+    conn = get_db_connection()
+    if not conn:
+        await update.message.reply_text(
+            "❌ Ошибка подключения к базе данных.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+    
+    try:
+        cursor = conn.cursor()
+        cursor.execute('SELECT category, amount, comment FROM budget_plan_items WHERE plan_id = %s ORDER BY id', (pid,))
+        current_items = cursor.fetchall()
+        
+        context.user_data['current_plan_items'] = current_items
+        context.user_data['editing_items'] = list(current_items)  # Копия для редактирования
+        
+        await update.message.reply_text(
+            f"💰 Новая общая сумма: {new_total:.2f} Тг\n\n"
+            f"Текущие категории плана:\n"
+            + "\n".join([f"• {cat}: {float(amt):.2f} Тг" for cat, amt, comm in current_items]) + "\n\n"
+            f"Выберите категорию для редактирования или добавьте новую:",
+            reply_markup=get_categories_keyboard_with_done()
+        )
+        return PLAN_EDIT_CATEGORY_STATE
+        
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке плана: {e}")
+        await update.message.reply_text(
+            "❌ Ошибка при загрузке плана.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+    finally:
+        conn.close()
+
+async def planning_edit_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Редактирование категории плана"""
+    category = update.message.text.strip()
+    
+    if category == 'Готово':
+        return await planning_edit_save(update, context)
+    
+    # Проверяем специальную кнопку для создания новой категории
+    if category == "➕ Добавить новую категорию":
+        await update.message.reply_text(
+            "Введите название новой категории для планирования бюджета:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return PLAN_EDIT_COMMENT_STATE
+    
+    if category not in CATEGORIES:
+        await update.message.reply_text(
+            "Выберите категорию с клавиатуры, нажмите '➕ Добавить новую категорию' или отправьте 'Готово' для завершения.",
+            reply_markup=get_categories_keyboard_with_done()
+        )
+        return PLAN_EDIT_CATEGORY_STATE
+    
+    context.user_data['editing_category'] = category
+    
+    # Проверяем, есть ли уже эта категория в плане
+    editing_items = context.user_data.get('editing_items', [])
+    existing_amount = 0
+    for i, (cat, amt, comm) in enumerate(editing_items):
+        if cat == category:
+            existing_amount = float(amt)
+            break
+    
+    if existing_amount > 0:
+        await update.message.reply_text(
+            f"Категория '{category}' уже есть в плане с суммой {existing_amount:.2f} Тг.\n"
+            f"Введите новую сумму для этой категории:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+    else:
+        await update.message.reply_text(
+            f"Введите сумму для категории '{category}':",
+            reply_markup=ReplyKeyboardRemove()
+        )
+    
+    return PLAN_EDIT_AMOUNT_STATE
+
+async def planning_edit_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Редактирование суммы категории плана"""
+    try:
+        amount = float(update.message.text.replace(',', '.'))
+        if amount < 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Введите корректную сумму:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return PLAN_EDIT_AMOUNT_STATE
+    
+    category = context.user_data.get('editing_category')
+    editing_items = context.user_data.get('editing_items', [])
+    
+    # Обновляем или добавляем категорию
+    updated = False
+    for i, (cat, amt, comm) in enumerate(editing_items):
+        if cat == category:
+            editing_items[i] = (cat, amount, comm)
+            updated = True
+            break
+    
+    if not updated:
+        editing_items.append((category, amount, None))
+    
+    context.user_data['editing_items'] = editing_items
+    
+    await update.message.reply_text(
+        f"✅ {category}: {amount:.2f} Тг\n\n"
+        f"Выберите следующую категорию или 'Готово' для завершения:",
+        reply_markup=get_categories_keyboard_with_done()
+    )
+    return PLAN_EDIT_CATEGORY_STATE
+
+async def planning_edit_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Сохранение отредактированного плана"""
+    selected_plan = context.user_data.get('editing_plan')
+    pm, total, pid = selected_plan
+    
+    new_month = context.user_data.get('new_plan_month', pm)
+    new_total = context.user_data.get('new_plan_total', float(total))
+    editing_items = context.user_data.get('editing_items', [])
+    
+    # Сохраняем изменения в базу данных
+    conn = get_db_connection()
+    if not conn:
+        await update.message.reply_text(
+            "❌ Ошибка подключения к базе данных.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+    
+    try:
+        cursor = conn.cursor()
+        
+        # Обновляем основной план
+        cursor.execute('''
+            UPDATE budget_plans 
+            SET plan_month = %s, total_amount = %s 
+            WHERE id = %s
+        ''', (new_month, new_total, pid))
+        
+        # Удаляем старые элементы плана
+        cursor.execute('DELETE FROM budget_plan_items WHERE plan_id = %s', (pid,))
+        
+        # Добавляем новые элементы плана
+        for category, amount, comment in editing_items:
+            cursor.execute('''
+                INSERT INTO budget_plan_items (plan_id, category, amount, comment)
+                VALUES (%s, %s, %s, %s)
+            ''', (pid, category, amount, comment))
+        
+        conn.commit()
+        
+        # Формируем итоговое сообщение
+        items_text = "\n".join([f"• {cat}: {float(amt):.2f} Тг" for cat, amt, comm in editing_items])
+        
+        await update.message.reply_text(
+            f"✅ План успешно обновлен!\n\n"
+            f"📅 Месяц: {new_month.strftime('%m.%Y')}\n"
+            f"💰 Общая сумма: {new_total:.2f} Тг\n\n"
+            f"📋 Категории:\n{items_text}",
+            reply_markup=get_main_menu_keyboard()
+        )
+        
+    except Exception as e:
+        logger.error(f"Ошибка при сохранении плана: {e}")
+        await update.message.reply_text(
+            "❌ Ошибка при сохранении плана. Попробуйте снова.",
+            reply_markup=get_main_menu_keyboard()
+        )
+    finally:
+        conn.close()
+    
+    # Очищаем контекст
+    context.user_data.pop('editing_plan', None)
+    context.user_data.pop('new_plan_month', None)
+    context.user_data.pop('new_plan_total', None)
+    context.user_data.pop('editing_items', None)
+    context.user_data.pop('editing_category', None)
+    context.user_data.pop('current_plan_items', None)
+    
     return ConversationHandler.END
 
 async def planning_delete_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -3864,7 +4443,7 @@ def update_user_telegram_id(username: str, user_id: int) -> bool:
         cursor.execute('''
             UPDATE user_folders 
             SET user_id = %s 
-            WHERE username = %s AND (user_id IS NULL OR user_id = 0)
+            WHERE username = %s AND user_id IS NULL
         ''', (user_id, username))
         
         # Создаем категории и настройки для пользователя, если их еще нет
@@ -4031,7 +4610,7 @@ def create_user_folder(username: str, folder_name: str, user_id: int) -> tuple[b
             DO UPDATE SET folder_name = EXCLUDED.folder_name
         ''', (
             username, 
-            user_id if user_id != 0 else None, 
+            None,  # Всегда NULL при создании, обновится при первом входе
             folder_name, 
             'user',
             json.dumps({
@@ -4061,38 +4640,8 @@ def create_user_folder(username: str, folder_name: str, user_id: int) -> tuple[b
             ("Прочее", [])
         ]
         
-        # Создаем категории только если user_id не равен 0
-        if user_id != 0:
-            for category_name, keywords in default_categories:
-                cursor.execute('''
-                    INSERT INTO user_categories (user_id, category_name, keywords)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (user_id, category_name) DO NOTHING
-                ''', (user_id, category_name, keywords))
-        
-        # Создаем начальные настройки
-        initial_settings = [
-            ("notifications", {"enabled": True, "email": False, "telegram": True}),
-            ("currency", {"code": "Tg", "symbol": "₸"}),
-            ("language", {"code": "ru", "name": "Русский"}),
-            ("backup", {"auto_backup": True, "frequency": "daily"})
-        ]
-        
-        # Создаем настройки только если user_id не равен 0
-        if user_id != 0:
-            for setting_key, setting_value in initial_settings:
-                cursor.execute('''
-                    INSERT INTO user_settings (user_id, setting_key, setting_value)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (user_id, setting_key) DO NOTHING
-                ''', (user_id, setting_key, json.dumps(setting_value)))
-        
-        # Добавляем начальный лог только если user_id не равен 0
-        if user_id != 0:
-            cursor.execute('''
-                INSERT INTO user_logs (user_id, log_level, message)
-                VALUES (%s, %s, %s)
-            ''', (user_id, "INFO", f"Пользователь {username} создан с папкой {folder_name}"))
+        # Категории и настройки будут созданы при первом входе пользователя
+        # когда user_id будет обновлен на реальный
         
         conn.commit()
         
