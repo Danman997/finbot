@@ -2807,6 +2807,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         elif context.user_data.get('current_state') == 'plan_edit_choice':
             await planning_edit_choice(update, context)
             return
+    # Проверяем выбор плана по дате (например "✏️ 1.09.2025")
+    elif text and text.startswith("✏️ ") and len(text.split(".")) == 3:
+        if context.user_data.get('current_state') == 'plan_edit_choice':
+            await planning_edit_choice(update, context)
+            return
     elif text and text.replace('.', '').replace(',', '').isdigit():
         # Это числовой ввод - проверяем состояние
         if context.user_data.get('current_state') == 'plan_edit_total':
@@ -3801,144 +3806,105 @@ async def planning_edit_choice(update: Update, context: ContextTypes.DEFAULT_TYP
     # Парсим выбор пользователя
     if text.startswith("✏️ "):
         try:
-            # Извлекаем номер из текста "✏️ 1. ММ.ГГГГ"
-            choice_num = int(text.split(".")[0].split()[-1]) - 1
-            plans = context.user_data.get('plans_list', [])
+            choice_text = text[2:].strip()  # Убираем "✏️ "
             
-            if 0 <= choice_num < len(plans):
-                selected_plan = plans[choice_num]
-                context.user_data['editing_plan'] = selected_plan
-                
-                pm, total, pid = selected_plan
-                
-                # Загружаем детали плана
-                conn = get_db_connection()
-                if not conn:
-                    await update.message.reply_text(
-                        "❌ Ошибка подключения к базе данных.",
-                        reply_markup=get_main_menu_keyboard()
-                    )
-                    return ConversationHandler.END
-                
+            # Проверяем, это дата или номер
+            if "." in choice_text and len(choice_text.split(".")) == 3:
+                # Это дата (например "1.09.2025")
                 try:
-                    cursor = conn.cursor()
-                    cursor.execute('SELECT category, amount, comment FROM budget_plan_items WHERE plan_id = %s ORDER BY id', (pid,))
-                    current_items = cursor.fetchall()
+                    day, month, year = choice_text.split(".")
+                    target_date = datetime.strptime(f"{day}.{month}.{year}", "%d.%m.%Y")
                     
-                    context.user_data['current_plan_items'] = current_items
-                    context.user_data['editing_items'] = list(current_items)  # Копия для редактирования
+                    # Ищем план с этой датой
+                    plans = context.user_data.get('plans_list', [])
+                    selected_plan = None
                     
-                    # Показываем детали плана с кнопками управления
-                    plan_details = f"✏️ Редактирование плана:\n\n"
-                    plan_details += f"📅 Месяц: {pm.strftime('%m.%Y')}\n"
-                    plan_details += f"💰 Общая сумма: {float(total):.2f} Тг\n\n"
-                    plan_details += f"📋 Категории:\n"
+                    for plan in plans:
+                        pm, total, pid = plan
+                        if pm.month == target_date.month and pm.year == target_date.year:
+                            selected_plan = plan
+                            break
                     
-                    for i, (cat, amt, comm) in enumerate(current_items, 1):
-                        plan_details += f"{i}. {cat}: {float(amt):.2f} Тг\n"
-                    
-                    keyboard = [
-                        ["✏️ Изменить месяц", "✏️ Изменить сумму"],
-                        ["✏️ Редактировать категории", "✏️ Добавить категорию"],
-                        ["✅ Сохранить изменения", "❌ Отменить"]
-                    ]
-                    
+                    if not selected_plan:
+                        await update.message.reply_text(
+                            "❌ План с указанной датой не найден. Попробуйте снова.",
+                            reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+                        )
+                        return PLAN_EDIT_CHOICE_STATE
+                        
+                except ValueError:
                     await update.message.reply_text(
-                        plan_details,
-                        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+                        "❌ Неверный формат даты. Попробуйте снова.",
+                        reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
                     )
-                    context.user_data['current_state'] = 'plan_edit_details'
-                    return PLAN_EDIT_DETAILS_STATE
-                    
-                except Exception as e:
-                    logger.error(f"Ошибка при загрузке плана: {e}")
-                    await update.message.reply_text(
-                        "❌ Ошибка при загрузке плана.",
-                        reply_markup=get_main_menu_keyboard()
-                    )
-                    return ConversationHandler.END
-                finally:
-                    conn.close()
+                    return PLAN_EDIT_CHOICE_STATE
             else:
-                await update.message.reply_text(
-                    "❌ Неверный выбор. Попробуйте снова.",
-                    reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
-                )
-                return PLAN_EDIT_CHOICE_STATE
-        except (ValueError, IndexError):
-            await update.message.reply_text(
-                "❌ Неверный формат. Попробуйте снова.",
-                reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
-            )
-            return PLAN_EDIT_CHOICE_STATE
-    
-    # Обрабатываем выбор по номеру (например "1. 09.2025")
-    elif text and text[0].isdigit() and "." in text:
-        try:
-            # Извлекаем номер из текста "1. ММ.ГГГГ"
-            choice_num = int(text.split(".")[0]) - 1
-            plans = context.user_data.get('plans_list', [])
+                # Это выбор по номеру (например "1. Автострахование")
+                choice_num = int(choice_text.split(".")[0]) - 1
+                plans = context.user_data.get('plans_list', [])
+                
+                if 0 <= choice_num < len(plans):
+                    selected_plan = plans[choice_num]
+                else:
+                    await update.message.reply_text(
+                        "❌ Неверный выбор. Попробуйте снова.",
+                        reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+                    )
+                    return PLAN_EDIT_CHOICE_STATE
             
-            if 0 <= choice_num < len(plans):
-                selected_plan = plans[choice_num]
-                context.user_data['editing_plan'] = selected_plan
-                
-                pm, total, pid = selected_plan
-                
-                # Загружаем детали плана
-                conn = get_db_connection()
-                if not conn:
-                    await update.message.reply_text(
-                        "❌ Ошибка подключения к базе данных.",
-                        reply_markup=get_main_menu_keyboard()
-                    )
-                    return ConversationHandler.END
-                
-                try:
-                    cursor = conn.cursor()
-                    cursor.execute('SELECT category, amount, comment FROM budget_plan_items WHERE plan_id = %s ORDER BY id', (pid,))
-                    current_items = cursor.fetchall()
-                    
-                    context.user_data['current_plan_items'] = current_items
-                    context.user_data['editing_items'] = list(current_items)  # Копия для редактирования
-                    
-                    # Показываем детали плана с кнопками управления
-                    plan_details = f"✏️ Редактирование плана:\n\n"
-                    plan_details += f"📅 Месяц: {pm.strftime('%m.%Y')}\n"
-                    plan_details += f"💰 Общая сумма: {float(total):.2f} Тг\n\n"
-                    plan_details += f"📋 Категории:\n"
-                    
-                    for i, (cat, amt, comm) in enumerate(current_items, 1):
-                        plan_details += f"{i}. {cat}: {float(amt):.2f} Тг\n"
-                    
-                    keyboard = [
-                        ["✏️ Изменить месяц", "✏️ Изменить сумму"],
-                        ["✏️ Редактировать категории", "✏️ Добавить категорию"],
-                        ["✅ Сохранить изменения", "❌ Отменить"]
-                    ]
-                    
-                    await update.message.reply_text(
-                        plan_details,
-                        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-                    )
-                    context.user_data['current_state'] = 'plan_edit_details'
-                    return PLAN_EDIT_DETAILS_STATE
-                    
-                except Exception as e:
-                    logger.error(f"Ошибка при загрузке плана: {e}")
-                    await update.message.reply_text(
-                        "❌ Ошибка при загрузке плана.",
-                        reply_markup=get_main_menu_keyboard()
-                    )
-                    return ConversationHandler.END
-                finally:
-                    conn.close()
-            else:
+            # Обрабатываем выбранный план
+            context.user_data['editing_plan'] = selected_plan
+            pm, total, pid = selected_plan
+            
+            # Загружаем детали плана
+            conn = get_db_connection()
+            if not conn:
                 await update.message.reply_text(
-                    "❌ Неверный выбор. Попробуйте снова.",
-                    reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+                    "❌ Ошибка подключения к базе данных.",
+                    reply_markup=get_main_menu_keyboard()
                 )
-                return PLAN_EDIT_CHOICE_STATE
+                return ConversationHandler.END
+            
+            try:
+                cursor = conn.cursor()
+                cursor.execute('SELECT category, amount, comment FROM budget_plan_items WHERE plan_id = %s ORDER BY id', (pid,))
+                current_items = cursor.fetchall()
+                
+                context.user_data['current_plan_items'] = current_items
+                context.user_data['editing_items'] = list(current_items)  # Копия для редактирования
+                
+                # Показываем детали плана с кнопками управления
+                plan_details = f"✏️ Редактирование плана:\n\n"
+                plan_details += f"📅 Месяц: {pm.strftime('%m.%Y')}\n"
+                plan_details += f"💰 Общая сумма: {float(total):.2f} Тг\n\n"
+                plan_details += f"📋 Категории:\n"
+                
+                for i, (cat, amt, comm) in enumerate(current_items, 1):
+                    plan_details += f"{i}. {cat}: {float(amt):.2f} Тг\n"
+                
+                keyboard = [
+                    ["✏️ Изменить месяц", "✏️ Изменить сумму"],
+                    ["✏️ Редактировать категории", "✏️ Добавить категорию"],
+                    ["✅ Сохранить изменения", "❌ Отменить"]
+                ]
+                
+                await update.message.reply_text(
+                    plan_details,
+                    reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+                )
+                context.user_data['current_state'] = 'plan_edit_details'
+                return PLAN_EDIT_DETAILS_STATE
+                
+            except Exception as e:
+                logger.error(f"Ошибка при загрузке плана: {e}")
+                await update.message.reply_text(
+                    "❌ Ошибка при загрузке плана.",
+                    reply_markup=get_main_menu_keyboard()
+                )
+                return ConversationHandler.END
+            finally:
+                conn.close()
+                
         except (ValueError, IndexError):
             await update.message.reply_text(
                 "❌ Неверный формат. Попробуйте снова.",
