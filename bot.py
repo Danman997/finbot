@@ -1827,6 +1827,7 @@ async def reminder_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
                 ["🗑️ Удалить напоминание", "🔙 Назад"]
             ], resize_keyboard=True)
         )
+        context.user_data['current_state'] = 'reminder_menu'
         return REMINDER_MENU_STATE
     
     # Обработка выбора в меню напоминаний
@@ -2773,6 +2774,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if context.user_data.get('current_state') == 'plan_edit_details':
             await planning_edit_details(update, context)
             return
+    # Проверяем кнопки редактирования напоминаний
+    elif text in ["✏️ Редактировать напоминание", "🗑️ Удалить напоминание", "📋 Список напоминаний"]:
+        if context.user_data.get('current_state') == 'reminder_menu':
+            await reminder_menu(update, context)
+            return
+    # Проверяем кнопки редактирования планов
+    elif text in ["✏️ Редактировать план", "🗑️ Удалить план", "📋 Список планов"]:
+        if context.user_data.get('current_state') == 'plan_menu':
+            await planning_menu(update, context)
+            return
     # Проверяем выбор элементов для редактирования
     elif text and text.startswith("✏️ ") and "." in text:
         # Это выбор элемента для редактирования - передаем в соответствующий обработчик
@@ -2789,6 +2800,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             return
         elif context.user_data.get('current_state') == 'plan_edit_choice':
             await planning_edit_choice(update, context)
+            return
+    elif text and text.replace('.', '').replace(',', '').isdigit():
+        # Это числовой ввод - проверяем состояние
+        if context.user_data.get('current_state') == 'plan_edit_total':
+            await planning_edit_total(update, context)
+            return
+        elif context.user_data.get('current_state') == 'plan_edit_amount':
+            await planning_edit_amount(update, context)
+            return
+        elif context.user_data.get('current_state') == 'reminder_edit_amount':
+            await reminder_edit_amount(update, context)
+            return
+    elif text and '.' in text and len(text.split('.')) == 2:
+        # Это может быть ввод месяца (ММ.ГГГГ) - проверяем состояние
+        if context.user_data.get('current_state') == 'plan_edit_month':
+            await planning_edit_month(update, context)
             return
     elif text in ["💸 Добавить расход", "📊 Отчеты", "Сегодня", "Неделя", "Месяц", "Год"]:
         if text == "💸 Добавить расход":
@@ -3615,6 +3642,7 @@ async def planning_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             "Выберите действие:",
             reply_markup=ReplyKeyboardMarkup([["➕ Добавить планирование", "📋 Список планов"], ["🗑️ Удалить план", "🔙 Назад"]], resize_keyboard=True)
         )
+        context.user_data['current_state'] = 'plan_menu'
         return PLAN_MENU_STATE
     elif text == "➕ Добавить планирование":
         return await planning_start(update, context)
@@ -4207,6 +4235,7 @@ async def planning_edit_details(update: Update, context: ContextTypes.DEFAULT_TY
             f"Введите новый месяц в формате ММ.ГГГГ:",
             reply_markup=ReplyKeyboardRemove()
         )
+        context.user_data['current_state'] = 'plan_edit_month'
         return PLAN_EDIT_MONTH_STATE
     
     elif text == "✏️ Изменить сумму":
@@ -4218,6 +4247,7 @@ async def planning_edit_details(update: Update, context: ContextTypes.DEFAULT_TY
             f"Введите новую общую сумму бюджета:",
             reply_markup=ReplyKeyboardRemove()
         )
+        context.user_data['current_state'] = 'plan_edit_total'
         return PLAN_EDIT_TOTAL_STATE
     
     elif text == "✏️ Редактировать категории":
@@ -4244,6 +4274,7 @@ async def planning_edit_details(update: Update, context: ContextTypes.DEFAULT_TY
             categories_text,
             reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         )
+        context.user_data['current_state'] = 'plan_edit_category_choice'
         return PLAN_EDIT_CATEGORY_CHOICE_STATE
     
     elif text == "✏️ Добавить категорию":
@@ -4251,6 +4282,7 @@ async def planning_edit_details(update: Update, context: ContextTypes.DEFAULT_TY
             "Выберите категорию для добавления:",
             reply_markup=get_categories_keyboard_with_done()
         )
+        context.user_data['current_state'] = 'plan_edit_category'
         return PLAN_EDIT_CATEGORY_STATE
     
     elif text == "✅ Сохранить изменения":
@@ -4323,6 +4355,7 @@ async def planning_edit_category_choice(update: Update, context: ContextTypes.DE
                     f"Введите новую сумму для этой категории:",
                     reply_markup=ReplyKeyboardRemove()
                 )
+                context.user_data['current_state'] = 'plan_edit_amount'
                 return PLAN_EDIT_AMOUNT_STATE
             else:
                 await update.message.reply_text(
