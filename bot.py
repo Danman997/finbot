@@ -2768,6 +2768,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     elif text == "📋 Список планов":
         await planning_menu(update, context)
         return
+    # Проверяем кнопки редактирования планов
+    elif text in ["✏️ Изменить месяц", "✏️ Изменить сумму", "✏️ Редактировать категории", "✏️ Добавить категорию", "✅ Сохранить изменения", "❌ Отменить"]:
+        if context.user_data.get('current_state') == 'plan_edit_details':
+            await planning_edit_details(update, context)
+            return
     # Проверяем выбор элементов для редактирования
     elif text and text.startswith("✏️ ") and "." in text:
         # Это выбор элемента для редактирования - передаем в соответствующий обработчик
@@ -3802,6 +3807,7 @@ async def planning_edit_choice(update: Update, context: ContextTypes.DEFAULT_TYP
                         plan_details,
                         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
                     )
+                    context.user_data['current_state'] = 'plan_edit_details'
                     return PLAN_EDIT_DETAILS_STATE
                     
                 except Exception as e:
@@ -3875,6 +3881,7 @@ async def planning_edit_choice(update: Update, context: ContextTypes.DEFAULT_TYP
                         plan_details,
                         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
                     )
+                    context.user_data['current_state'] = 'plan_edit_details'
                     return PLAN_EDIT_DETAILS_STATE
                     
                 except Exception as e:
@@ -4254,6 +4261,8 @@ async def planning_edit_details(update: Update, context: ContextTypes.DEFAULT_TY
         context.user_data.pop('current_plan_items', None)
         context.user_data.pop('editing_items', None)
         context.user_data.pop('current_state', None)
+        context.user_data.pop('editing_category_index', None)
+        context.user_data.pop('editing_category_item', None)
         
         await update.message.reply_text(
             "❌ Редактирование отменено.",
