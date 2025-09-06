@@ -2874,6 +2874,8 @@ PLAN_EDIT_TOTAL_STATE = 35
 PLAN_EDIT_CATEGORY_STATE = 36
 PLAN_EDIT_AMOUNT_STATE = 37
 PLAN_EDIT_COMMENT_STATE = 38
+PLAN_EDIT_DETAILS_STATE = 39
+PLAN_EDIT_CATEGORY_CHOICE_STATE = 40
 
 # --- Состояния для аналитики ---
 ANALYTICS_MENU_STATE = 30
@@ -3267,6 +3269,8 @@ def main():
             PLAN_EDIT_CATEGORY_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_edit_category)],
             PLAN_EDIT_AMOUNT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_edit_amount)],
             PLAN_EDIT_COMMENT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, custom_category_input)],
+            PLAN_EDIT_DETAILS_STATE: [MessageHandler(filters.Regex("^(✏️ Изменить месяц|✏️ Изменить сумму|✏️ Редактировать категории|✏️ Добавить категорию|✅ Сохранить изменения|❌ Отменить)$"), planning_edit_details)],
+            PLAN_EDIT_CATEGORY_CHOICE_STATE: [MessageHandler(filters.Regex("^(✏️ \d+\.|🔙 Назад)$"), planning_edit_category_choice)],
             CUSTOM_CATEGORY_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, custom_category_input)],
         },
         fallbacks=[CommandHandler("start", start)],
@@ -3762,14 +3766,53 @@ async def planning_edit_choice(update: Update, context: ContextTypes.DEFAULT_TYP
                 
                 pm, total, pid = selected_plan
                 
-                await update.message.reply_text(
-                    f"✏️ Редактирование плана:\n\n"
-                    f"📅 Месяц: {pm.strftime('%m.%Y')}\n"
-                    f"💰 Общая сумма: {float(total):.2f} Тг\n\n"
-                    f"Введите новый месяц в формате ММ.ГГГГ (или отправьте текущий без изменений):",
-                    reply_markup=ReplyKeyboardRemove()
-                )
-                return PLAN_EDIT_MONTH_STATE
+                # Загружаем детали плана
+                conn = get_db_connection()
+                if not conn:
+                    await update.message.reply_text(
+                        "❌ Ошибка подключения к базе данных.",
+                        reply_markup=get_main_menu_keyboard()
+                    )
+                    return ConversationHandler.END
+                
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute('SELECT category, amount, comment FROM budget_plan_items WHERE plan_id = %s ORDER BY id', (pid,))
+                    current_items = cursor.fetchall()
+                    
+                    context.user_data['current_plan_items'] = current_items
+                    context.user_data['editing_items'] = list(current_items)  # Копия для редактирования
+                    
+                    # Показываем детали плана с кнопками управления
+                    plan_details = f"✏️ Редактирование плана:\n\n"
+                    plan_details += f"📅 Месяц: {pm.strftime('%m.%Y')}\n"
+                    plan_details += f"💰 Общая сумма: {float(total):.2f} Тг\n\n"
+                    plan_details += f"📋 Категории:\n"
+                    
+                    for i, (cat, amt, comm) in enumerate(current_items, 1):
+                        plan_details += f"{i}. {cat}: {float(amt):.2f} Тг\n"
+                    
+                    keyboard = [
+                        ["✏️ Изменить месяц", "✏️ Изменить сумму"],
+                        ["✏️ Редактировать категории", "✏️ Добавить категорию"],
+                        ["✅ Сохранить изменения", "❌ Отменить"]
+                    ]
+                    
+                    await update.message.reply_text(
+                        plan_details,
+                        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+                    )
+                    return PLAN_EDIT_DETAILS_STATE
+                    
+                except Exception as e:
+                    logger.error(f"Ошибка при загрузке плана: {e}")
+                    await update.message.reply_text(
+                        "❌ Ошибка при загрузке плана.",
+                        reply_markup=get_main_menu_keyboard()
+                    )
+                    return ConversationHandler.END
+                finally:
+                    conn.close()
             else:
                 await update.message.reply_text(
                     "❌ Неверный выбор. Попробуйте снова.",
@@ -3796,14 +3839,53 @@ async def planning_edit_choice(update: Update, context: ContextTypes.DEFAULT_TYP
                 
                 pm, total, pid = selected_plan
                 
-                await update.message.reply_text(
-                    f"✏️ Редактирование плана:\n\n"
-                    f"📅 Месяц: {pm.strftime('%m.%Y')}\n"
-                    f"💰 Общая сумма: {float(total):.2f} Тг\n\n"
-                    f"Введите новый месяц в формате ММ.ГГГГ (или отправьте текущий без изменений):",
-                    reply_markup=ReplyKeyboardRemove()
-                )
-                return PLAN_EDIT_MONTH_STATE
+                # Загружаем детали плана
+                conn = get_db_connection()
+                if not conn:
+                    await update.message.reply_text(
+                        "❌ Ошибка подключения к базе данных.",
+                        reply_markup=get_main_menu_keyboard()
+                    )
+                    return ConversationHandler.END
+                
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute('SELECT category, amount, comment FROM budget_plan_items WHERE plan_id = %s ORDER BY id', (pid,))
+                    current_items = cursor.fetchall()
+                    
+                    context.user_data['current_plan_items'] = current_items
+                    context.user_data['editing_items'] = list(current_items)  # Копия для редактирования
+                    
+                    # Показываем детали плана с кнопками управления
+                    plan_details = f"✏️ Редактирование плана:\n\n"
+                    plan_details += f"📅 Месяц: {pm.strftime('%m.%Y')}\n"
+                    plan_details += f"💰 Общая сумма: {float(total):.2f} Тг\n\n"
+                    plan_details += f"📋 Категории:\n"
+                    
+                    for i, (cat, amt, comm) in enumerate(current_items, 1):
+                        plan_details += f"{i}. {cat}: {float(amt):.2f} Тг\n"
+                    
+                    keyboard = [
+                        ["✏️ Изменить месяц", "✏️ Изменить сумму"],
+                        ["✏️ Редактировать категории", "✏️ Добавить категорию"],
+                        ["✅ Сохранить изменения", "❌ Отменить"]
+                    ]
+                    
+                    await update.message.reply_text(
+                        plan_details,
+                        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+                    )
+                    return PLAN_EDIT_DETAILS_STATE
+                    
+                except Exception as e:
+                    logger.error(f"Ошибка при загрузке плана: {e}")
+                    await update.message.reply_text(
+                        "❌ Ошибка при загрузке плана.",
+                        reply_markup=get_main_menu_keyboard()
+                    )
+                    return ConversationHandler.END
+                finally:
+                    conn.close()
             else:
                 await update.message.reply_text(
                     "❌ Неверный выбор. Попробуйте снова.",
@@ -3841,15 +3923,33 @@ async def planning_edit_month(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     context.user_data['new_plan_month'] = new_month
     
+    # Обновляем план в контексте
     selected_plan = context.user_data.get('editing_plan')
     pm, total, pid = selected_plan
+    context.user_data['editing_plan'] = (new_month, total, pid)
+    
+    # Возвращаемся к детальному редактированию
+    editing_items = context.user_data.get('editing_items', [])
+    
+    plan_details = f"✏️ Редактирование плана:\n\n"
+    plan_details += f"📅 Месяц: {new_month.strftime('%m.%Y')}\n"
+    plan_details += f"💰 Общая сумма: {float(total):.2f} Тг\n\n"
+    plan_details += f"📋 Категории:\n"
+    
+    for i, (cat, amt, comm) in enumerate(editing_items, 1):
+        plan_details += f"{i}. {cat}: {float(amt):.2f} Тг\n"
+    
+    keyboard = [
+        ["✏️ Изменить месяц", "✏️ Изменить сумму"],
+        ["✏️ Редактировать категории", "✏️ Добавить категорию"],
+        ["✅ Сохранить изменения", "❌ Отменить"]
+    ]
     
     await update.message.reply_text(
-        f"📅 Новый месяц: {new_month.strftime('%m.%Y')}\n\n"
-        f"Введите новую общую сумму бюджета (или отправьте текущую без изменений):",
-        reply_markup=ReplyKeyboardRemove()
+        f"✅ Месяц обновлен: {new_month.strftime('%m.%Y')}\n\n" + plan_details,
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     )
-    return PLAN_EDIT_TOTAL_STATE
+    return PLAN_EDIT_DETAILS_STATE
 
 async def planning_edit_total(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Редактирование общей суммы плана"""
@@ -3874,44 +3974,33 @@ async def planning_edit_total(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     context.user_data['new_plan_total'] = new_total
     
-    # Загружаем текущие категории плана
+    # Обновляем план в контексте
     selected_plan = context.user_data.get('editing_plan')
     pm, total, pid = selected_plan
+    context.user_data['editing_plan'] = (pm, new_total, pid)
     
-    conn = get_db_connection()
-    if not conn:
-        await update.message.reply_text(
-            "❌ Ошибка подключения к базе данных.",
-            reply_markup=get_main_menu_keyboard()
-        )
-        return ConversationHandler.END
+    # Возвращаемся к детальному редактированию
+    editing_items = context.user_data.get('editing_items', [])
     
-    try:
-        cursor = conn.cursor()
-        cursor.execute('SELECT category, amount, comment FROM budget_plan_items WHERE plan_id = %s ORDER BY id', (pid,))
-        current_items = cursor.fetchall()
-        
-        context.user_data['current_plan_items'] = current_items
-        context.user_data['editing_items'] = list(current_items)  # Копия для редактирования
-        
-        await update.message.reply_text(
-            f"💰 Новая общая сумма: {new_total:.2f} Тг\n\n"
-            f"Текущие категории плана:\n"
-            + "\n".join([f"• {cat}: {float(amt):.2f} Тг" for cat, amt, comm in current_items]) + "\n\n"
-            f"Выберите категорию для редактирования или добавьте новую:",
-            reply_markup=get_categories_keyboard_with_done()
-        )
-        return PLAN_EDIT_CATEGORY_STATE
-        
-    except Exception as e:
-        logger.error(f"Ошибка при загрузке плана: {e}")
-        await update.message.reply_text(
-            "❌ Ошибка при загрузке плана.",
-            reply_markup=get_main_menu_keyboard()
-        )
-        return ConversationHandler.END
-    finally:
-        conn.close()
+    plan_details = f"✏️ Редактирование плана:\n\n"
+    plan_details += f"📅 Месяц: {pm.strftime('%m.%Y')}\n"
+    plan_details += f"💰 Общая сумма: {new_total:.2f} Тг\n\n"
+    plan_details += f"📋 Категории:\n"
+    
+    for i, (cat, amt, comm) in enumerate(editing_items, 1):
+        plan_details += f"{i}. {cat}: {float(amt):.2f} Тг\n"
+    
+    keyboard = [
+        ["✏️ Изменить месяц", "✏️ Изменить сумму"],
+        ["✏️ Редактировать категории", "✏️ Добавить категорию"],
+        ["✅ Сохранить изменения", "❌ Отменить"]
+    ]
+    
+    await update.message.reply_text(
+        f"✅ Сумма обновлена: {new_total:.2f} Тг\n\n" + plan_details,
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    )
+    return PLAN_EDIT_DETAILS_STATE
 
 async def planning_edit_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Редактирование категории плана"""
@@ -3988,12 +4077,44 @@ async def planning_edit_amount(update: Update, context: ContextTypes.DEFAULT_TYP
     
     context.user_data['editing_items'] = editing_items
     
-    await update.message.reply_text(
-        f"✅ {category}: {amount:.2f} Тг\n\n"
-        f"Выберите следующую категорию или 'Готово' для завершения:",
-        reply_markup=get_categories_keyboard_with_done()
-    )
-    return PLAN_EDIT_CATEGORY_STATE
+    # Проверяем, редактируем ли мы существующую категорию или добавляем новую
+    if 'editing_category_index' in context.user_data:
+        # Редактируем существующую категорию
+        editing_items[context.user_data['editing_category_index']] = (category, amount, comm)
+        context.user_data.pop('editing_category_index', None)
+        context.user_data.pop('editing_category_item', None)
+        
+        # Возвращаемся к детальному редактированию
+        selected_plan = context.user_data.get('editing_plan')
+        pm, total, pid = selected_plan
+        
+        plan_details = f"✏️ Редактирование плана:\n\n"
+        plan_details += f"📅 Месяц: {pm.strftime('%m.%Y')}\n"
+        plan_details += f"💰 Общая сумма: {float(total):.2f} Тг\n\n"
+        plan_details += f"📋 Категории:\n"
+        
+        for i, (cat, amt, comm) in enumerate(editing_items, 1):
+            plan_details += f"{i}. {cat}: {float(amt):.2f} Тг\n"
+        
+        keyboard = [
+            ["✏️ Изменить месяц", "✏️ Изменить сумму"],
+            ["✏️ Редактировать категории", "✏️ Добавить категорию"],
+            ["✅ Сохранить изменения", "❌ Отменить"]
+        ]
+        
+        await update.message.reply_text(
+            f"✅ {category}: {amount:.2f} Тг\n\n" + plan_details,
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+        return PLAN_EDIT_DETAILS_STATE
+    else:
+        # Добавляем новую категорию
+        await update.message.reply_text(
+            f"✅ {category}: {amount:.2f} Тг\n\n"
+            f"Выберите следующую категорию или 'Готово' для завершения:",
+            reply_markup=get_categories_keyboard_with_done()
+        )
+        return PLAN_EDIT_CATEGORY_STATE
 
 async def planning_edit_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Сохранение отредактированного плана"""
@@ -4065,6 +4186,149 @@ async def planning_edit_save(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data.pop('current_state', None)
     
     return ConversationHandler.END
+
+async def planning_edit_details(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка детального редактирования плана"""
+    text = update.message.text
+    
+    if text == "✏️ Изменить месяц":
+        selected_plan = context.user_data.get('editing_plan')
+        pm, total, pid = selected_plan
+        
+        await update.message.reply_text(
+            f"📅 Текущий месяц: {pm.strftime('%m.%Y')}\n\n"
+            f"Введите новый месяц в формате ММ.ГГГГ:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return PLAN_EDIT_MONTH_STATE
+    
+    elif text == "✏️ Изменить сумму":
+        selected_plan = context.user_data.get('editing_plan')
+        pm, total, pid = selected_plan
+        
+        await update.message.reply_text(
+            f"💰 Текущая сумма: {float(total):.2f} Тг\n\n"
+            f"Введите новую общую сумму бюджета:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return PLAN_EDIT_TOTAL_STATE
+    
+    elif text == "✏️ Редактировать категории":
+        editing_items = context.user_data.get('editing_items', [])
+        
+        if not editing_items:
+            await update.message.reply_text(
+                "❌ В плане нет категорий для редактирования.",
+                reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+            )
+            return PLAN_EDIT_DETAILS_STATE
+        
+        # Показываем список категорий для редактирования
+        categories_text = "✏️ Выберите категорию для редактирования:\n\n"
+        keyboard = []
+        
+        for i, (cat, amt, comm) in enumerate(editing_items, 1):
+            categories_text += f"{i}. {cat}: {float(amt):.2f} Тг\n"
+            keyboard.append([KeyboardButton(f"✏️ {i}. {cat}")])
+        
+        keyboard.append([KeyboardButton("🔙 Назад")])
+        
+        await update.message.reply_text(
+            categories_text,
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+        return PLAN_EDIT_CATEGORY_CHOICE_STATE
+    
+    elif text == "✏️ Добавить категорию":
+        await update.message.reply_text(
+            "Выберите категорию для добавления:",
+            reply_markup=get_categories_keyboard_with_done()
+        )
+        return PLAN_EDIT_CATEGORY_STATE
+    
+    elif text == "✅ Сохранить изменения":
+        return await planning_edit_save(update, context)
+    
+    elif text == "❌ Отменить":
+        context.user_data.pop('editing_plan', None)
+        context.user_data.pop('current_plan_items', None)
+        context.user_data.pop('editing_items', None)
+        context.user_data.pop('current_state', None)
+        
+        await update.message.reply_text(
+            "❌ Редактирование отменено.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+    
+    return PLAN_EDIT_DETAILS_STATE
+
+async def planning_edit_category_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Выбор категории для редактирования"""
+    text = update.message.text
+    
+    if text == "🔙 Назад":
+        # Возвращаемся к детальному редактированию
+        selected_plan = context.user_data.get('editing_plan')
+        pm, total, pid = selected_plan
+        editing_items = context.user_data.get('editing_items', [])
+        
+        plan_details = f"✏️ Редактирование плана:\n\n"
+        plan_details += f"📅 Месяц: {pm.strftime('%m.%Y')}\n"
+        plan_details += f"💰 Общая сумма: {float(total):.2f} Тг\n\n"
+        plan_details += f"📋 Категории:\n"
+        
+        for i, (cat, amt, comm) in enumerate(editing_items, 1):
+            plan_details += f"{i}. {cat}: {float(amt):.2f} Тг\n"
+        
+        keyboard = [
+            ["✏️ Изменить месяц", "✏️ Изменить сумму"],
+            ["✏️ Редактировать категории", "✏️ Добавить категорию"],
+            ["✅ Сохранить изменения", "❌ Отменить"]
+        ]
+        
+        await update.message.reply_text(
+            plan_details,
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+        return PLAN_EDIT_DETAILS_STATE
+    
+    # Парсим выбор категории
+    if text.startswith("✏️ "):
+        try:
+            choice_num = int(text.split(".")[0].split()[-1]) - 1
+            editing_items = context.user_data.get('editing_items', [])
+            
+            if 0 <= choice_num < len(editing_items):
+                selected_category = editing_items[choice_num]
+                context.user_data['editing_category_item'] = selected_category
+                context.user_data['editing_category_index'] = choice_num
+                
+                cat, amt, comm = selected_category
+                
+                await update.message.reply_text(
+                    f"✏️ Редактирование категории:\n\n"
+                    f"📝 Категория: {cat}\n"
+                    f"💰 Сумма: {float(amt):.2f} Тг\n"
+                    f"📄 Комментарий: {comm or 'Не указан'}\n\n"
+                    f"Введите новую сумму для этой категории:",
+                    reply_markup=ReplyKeyboardRemove()
+                )
+                return PLAN_EDIT_AMOUNT_STATE
+            else:
+                await update.message.reply_text(
+                    "❌ Неверный выбор. Попробуйте снова.",
+                    reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+                )
+                return PLAN_EDIT_CATEGORY_CHOICE_STATE
+        except (ValueError, IndexError):
+            await update.message.reply_text(
+                "❌ Неверный формат. Попробуйте снова.",
+                reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+            )
+            return PLAN_EDIT_CATEGORY_CHOICE_STATE
+    
+    return PLAN_EDIT_CATEGORY_CHOICE_STATE
 
 async def planning_delete_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Начало удаления плана бюджета"""
