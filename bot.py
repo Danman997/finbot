@@ -2747,6 +2747,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     elif text == "👥 Управление группой":
         await group_management_menu(update, context)
         return
+    elif text == "✏️ Редактировать напоминание":
+        await reminder_menu(update, context)
+        return
+    elif text == "✏️ Редактировать план":
+        await planning_menu(update, context)
+        return
+    elif text == "🗑️ Удалить напоминание":
+        await reminder_menu(update, context)
+        return
+    elif text == "🗑️ Удалить план":
+        await planning_menu(update, context)
+        return
+    elif text == "📋 Список напоминаний":
+        await reminder_menu(update, context)
+        return
+    elif text == "📋 Список планов":
+        await planning_menu(update, context)
+        return
     elif text in ["💸 Добавить расход", "📊 Отчеты", "Сегодня", "Неделя", "Месяц", "Год"]:
         if text == "💸 Добавить расход":
             await update.message.reply_text(
