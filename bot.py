@@ -1992,6 +1992,42 @@ async def reminder_edit_choice(update: Update, context: ContextTypes.DEFAULT_TYP
             )
             return REMINDER_EDIT_CHOICE_STATE
     
+    # Обрабатываем выбор по номеру (например "1. Автострахование")
+    elif text and text[0].isdigit() and "." in text:
+        try:
+            # Извлекаем номер из текста "1. Название"
+            choice_num = int(text.split(".")[0]) - 1
+            reminders = context.user_data.get('reminders_list', [])
+            
+            if 0 <= choice_num < len(reminders):
+                selected_reminder = reminders[choice_num]
+                context.user_data['editing_reminder'] = selected_reminder
+                
+                rem_id, title, desc, amount, start_date, end_date, sent_10, sent_3, created = selected_reminder
+                
+                await update.message.reply_text(
+                    f"✏️ Редактирование напоминания:\n\n"
+                    f"📝 Текущее название: {title}\n"
+                    f"📄 Описание: {desc or 'Не указано'}\n"
+                    f"💰 Сумма: {amount:.2f} Тг\n"
+                    f"📅 Период: {start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')}\n\n"
+                    f"Введите новое название (или отправьте текущее без изменений):",
+                    reply_markup=ReplyKeyboardRemove()
+                )
+                return REMINDER_EDIT_TITLE_STATE
+            else:
+                await update.message.reply_text(
+                    "❌ Неверный выбор. Попробуйте снова.",
+                    reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+                )
+                return REMINDER_EDIT_CHOICE_STATE
+        except (ValueError, IndexError):
+            await update.message.reply_text(
+                "❌ Неверный формат. Попробуйте снова.",
+                reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+            )
+            return REMINDER_EDIT_CHOICE_STATE
+    
     return REMINDER_EDIT_CHOICE_STATE
 
 async def reminder_edit_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -3159,7 +3195,7 @@ def main():
             REMINDER_END_DATE_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_end_date_input)],
             REMINDER_MANAGE_STATE: [MessageHandler(filters.Regex("^(❌ Удалить \d+|🔙 Назад)$"), reminder_manage)],
             REMINDER_DELETE_STATE: [MessageHandler(filters.Regex("^(❌ Удалить \d+|🔙 Назад)$"), reminder_delete_confirm)],
-            REMINDER_EDIT_CHOICE_STATE: [MessageHandler(filters.Regex("^(✏️ \d+\.|🔙 Назад)$"), reminder_edit_choice)],
+            REMINDER_EDIT_CHOICE_STATE: [MessageHandler(filters.Regex("^(✏️ \d+\.|\d+\.|🔙 Назад)$"), reminder_edit_choice)],
             REMINDER_EDIT_TITLE_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_edit_title)],
             REMINDER_EDIT_DESC_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_edit_desc)],
             REMINDER_EDIT_AMOUNT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_edit_amount)],
@@ -3187,7 +3223,7 @@ def main():
             PLAN_AMOUNT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_amount)],
             PLAN_COMMENT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_comment)],
             PLAN_DELETE_STATE: [MessageHandler(filters.Regex("^(❌ Удалить план \d+|🔙 Назад)$"), planning_delete_confirm)],
-            PLAN_EDIT_CHOICE_STATE: [MessageHandler(filters.Regex("^(✏️ \d+\.|🔙 Назад)$"), planning_edit_choice)],
+            PLAN_EDIT_CHOICE_STATE: [MessageHandler(filters.Regex("^(✏️ \d+\.|\d+\.|🔙 Назад)$"), planning_edit_choice)],
             PLAN_EDIT_MONTH_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_edit_month)],
             PLAN_EDIT_TOTAL_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_edit_total)],
             PLAN_EDIT_CATEGORY_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_edit_category)],
@@ -3678,6 +3714,40 @@ async def planning_edit_choice(update: Update, context: ContextTypes.DEFAULT_TYP
         try:
             # Извлекаем номер из текста "✏️ 1. ММ.ГГГГ"
             choice_num = int(text.split(".")[0].split()[-1]) - 1
+            plans = context.user_data.get('plans_list', [])
+            
+            if 0 <= choice_num < len(plans):
+                selected_plan = plans[choice_num]
+                context.user_data['editing_plan'] = selected_plan
+                
+                pm, total, pid = selected_plan
+                
+                await update.message.reply_text(
+                    f"✏️ Редактирование плана:\n\n"
+                    f"📅 Месяц: {pm.strftime('%m.%Y')}\n"
+                    f"💰 Общая сумма: {float(total):.2f} Тг\n\n"
+                    f"Введите новый месяц в формате ММ.ГГГГ (или отправьте текущий без изменений):",
+                    reply_markup=ReplyKeyboardRemove()
+                )
+                return PLAN_EDIT_MONTH_STATE
+            else:
+                await update.message.reply_text(
+                    "❌ Неверный выбор. Попробуйте снова.",
+                    reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+                )
+                return PLAN_EDIT_CHOICE_STATE
+        except (ValueError, IndexError):
+            await update.message.reply_text(
+                "❌ Неверный формат. Попробуйте снова.",
+                reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+            )
+            return PLAN_EDIT_CHOICE_STATE
+    
+    # Обрабатываем выбор по номеру (например "1. 09.2025")
+    elif text and text[0].isdigit() and "." in text:
+        try:
+            # Извлекаем номер из текста "1. ММ.ГГГГ"
+            choice_num = int(text.split(".")[0]) - 1
             plans = context.user_data.get('plans_list', [])
             
             if 0 <= choice_num < len(plans):
