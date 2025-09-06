@@ -1905,6 +1905,7 @@ async def reminder_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             reminders_text,
             reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         )
+        context.user_data['current_state'] = 'reminder_edit_choice'
         return REMINDER_EDIT_CHOICE_STATE
     
     elif text == "🗑️ Удалить напоминание":
@@ -1947,6 +1948,7 @@ async def reminder_edit_choice(update: Update, context: ContextTypes.DEFAULT_TYP
     text = update.message.text
     
     if text == "🔙 Назад":
+        context.user_data.pop('current_state', None)
         await update.message.reply_text(
             "Выберите действие для напоминаний:",
             reply_markup=ReplyKeyboardMarkup([
@@ -2172,6 +2174,7 @@ async def reminder_edit_dates(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data.pop('new_title', None)
     context.user_data.pop('new_desc', None)
     context.user_data.pop('new_amount', None)
+    context.user_data.pop('current_state', None)
     
     return ConversationHandler.END
 
@@ -2765,6 +2768,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     elif text == "📋 Список планов":
         await planning_menu(update, context)
         return
+    # Проверяем выбор элементов для редактирования
+    elif text and text.startswith("✏️ ") and "." in text:
+        # Это выбор элемента для редактирования - передаем в соответствующий обработчик
+        if context.user_data.get('current_state') == 'reminder_edit_choice':
+            await reminder_edit_choice(update, context)
+            return
+        elif context.user_data.get('current_state') == 'plan_edit_choice':
+            await planning_edit_choice(update, context)
+            return
+    elif text and text[0].isdigit() and "." in text and not any(x in text for x in ["💸", "📊", "⏰", "📅", "📈", "👥"]):
+        # Это выбор по номеру (например "1. Автострахование" или "1. 09.2025")
+        if context.user_data.get('current_state') == 'reminder_edit_choice':
+            await reminder_edit_choice(update, context)
+            return
+        elif context.user_data.get('current_state') == 'plan_edit_choice':
+            await planning_edit_choice(update, context)
+            return
     elif text in ["💸 Добавить расход", "📊 Отчеты", "Сегодня", "Неделя", "Месяц", "Год"]:
         if text == "💸 Добавить расход":
             await update.message.reply_text(
@@ -3644,6 +3664,7 @@ async def planning_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             plans_text,
             reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         )
+        context.user_data['current_state'] = 'plan_edit_choice'
         return PLAN_EDIT_CHOICE_STATE
     
     elif text == "🗑️ Удалить план":
@@ -3721,6 +3742,7 @@ async def planning_edit_choice(update: Update, context: ContextTypes.DEFAULT_TYP
     text = update.message.text
     
     if text == "🔙 Назад":
+        context.user_data.pop('current_state', None)
         await update.message.reply_text(
             "Выберите действие:",
             reply_markup=ReplyKeyboardMarkup([["➕ Добавить планирование", "📋 Список планов"], ["🗑️ Удалить план", "🔙 Назад"]], resize_keyboard=True)
@@ -4040,6 +4062,7 @@ async def planning_edit_save(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data.pop('editing_items', None)
     context.user_data.pop('editing_category', None)
     context.user_data.pop('current_plan_items', None)
+    context.user_data.pop('current_state', None)
     
     return ConversationHandler.END
 
