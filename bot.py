@@ -2784,6 +2784,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if context.user_data.get('current_state') == 'plan_menu':
             await planning_menu(update, context)
             return
+    # Проверяем кнопки выбора категорий для редактирования
+    elif text and text.startswith("✏️ ") and text[2:].replace(".", "").replace(" ", "").isdigit():
+        # Это выбор категории по номеру (например "✏️ 5. Авто")
+        if context.user_data.get('current_state') == 'plan_edit_category_choice':
+            await planning_edit_category_choice(update, context)
+            return
     # Проверяем выбор элементов для редактирования
     elif text and text.startswith("✏️ ") and "." in text:
         # Это выбор элемента для редактирования - передаем в соответствующий обработчик
@@ -3301,8 +3307,14 @@ def main():
             PLAN_EDIT_CATEGORY_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_edit_category)],
             PLAN_EDIT_AMOUNT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_edit_amount)],
             PLAN_EDIT_COMMENT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, custom_category_input)],
-            PLAN_EDIT_DETAILS_STATE: [MessageHandler(filters.Regex("^(✏️ Изменить месяц|✏️ Изменить сумму|✏️ Редактировать категории|✏️ Добавить категорию|✅ Сохранить изменения|❌ Отменить)$"), planning_edit_details)],
-            PLAN_EDIT_CATEGORY_CHOICE_STATE: [MessageHandler(filters.Regex("^(✏️ \d+\.|🔙 Назад)$"), planning_edit_category_choice)],
+            PLAN_EDIT_DETAILS_STATE: [
+                MessageHandler(filters.Regex("^(✏️ Изменить месяц|✏️ Изменить сумму|✏️ Редактировать категории|✏️ Добавить категорию|✅ Сохранить изменения|❌ Отменить)$"), planning_edit_details),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, planning_edit_details)
+            ],
+            PLAN_EDIT_CATEGORY_CHOICE_STATE: [
+                MessageHandler(filters.Regex("^(✏️ \d+\.|🔙 Назад)$"), planning_edit_category_choice),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, planning_edit_category_choice)
+            ],
             CUSTOM_CATEGORY_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, custom_category_input)],
         },
         fallbacks=[CommandHandler("start", start)],
@@ -4042,7 +4054,31 @@ async def planning_edit_category(update: Update, context: ContextTypes.DEFAULT_T
     category = update.message.text.strip()
     
     if category == 'Готово':
-        return await planning_edit_save(update, context)
+        # Возвращаемся к детальному редактированию
+        selected_plan = context.user_data.get('editing_plan')
+        pm, total, pid = selected_plan
+        editing_items = context.user_data.get('editing_items', [])
+        
+        plan_details = f"✏️ Редактирование плана:\n\n"
+        plan_details += f"📅 Месяц: {pm.strftime('%m.%Y')}\n"
+        plan_details += f"💰 Общая сумма: {float(total):.2f} Тг\n\n"
+        plan_details += f"📋 Категории:\n"
+        
+        for i, (cat, amt, comm) in enumerate(editing_items, 1):
+            plan_details += f"{i}. {cat}: {float(amt):.2f} Тг\n"
+        
+        keyboard = [
+            ["✏️ Изменить месяц", "✏️ Изменить сумму"],
+            ["✏️ Редактировать категории", "✏️ Добавить категорию"],
+            ["✅ Сохранить изменения", "❌ Отменить"]
+        ]
+        
+        await update.message.reply_text(
+            plan_details,
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+        context.user_data['current_state'] = 'plan_edit_details'
+        return PLAN_EDIT_DETAILS_STATE
     
     # Проверяем специальную кнопку для создания новой категории
     if category == "➕ Добавить новую категорию":
@@ -4332,12 +4368,19 @@ async def planning_edit_category_choice(update: Update, context: ContextTypes.DE
             plan_details,
             reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         )
+        context.user_data['current_state'] = 'plan_edit_details'
         return PLAN_EDIT_DETAILS_STATE
     
     # Парсим выбор категории
     if text.startswith("✏️ "):
         try:
-            choice_num = int(text.split(".")[0].split()[-1]) - 1
+            # Извлекаем номер из текста "✏️ 5. Авто"
+            choice_text = text[2:].strip()  # Убираем "✏️ "
+            if "." in choice_text:
+                choice_num = int(choice_text.split(".")[0]) - 1
+            else:
+                choice_num = int(choice_text) - 1
+                
             editing_items = context.user_data.get('editing_items', [])
             
             if 0 <= choice_num < len(editing_items):
