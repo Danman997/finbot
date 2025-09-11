@@ -2073,18 +2073,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         elif context.user_data.get('current_state') == 'reminder_end_date':
             await reminder_end_date_input(update, context)
             return
-    elif text in ["💸 Добавить расход", "📊 Отчеты", "Сегодня", "Неделя", "Месяц", "Год"]:
-        if text == "💸 Добавить расход":
-            await update.message.reply_text(
-                "💸 Для добавления расхода напишите в формате:\n\n"
-                "📝 Описание Сумма\n\n"
-                "Например:\n"
-                "• Обед в кафе 1500\n"
-                "• Такси домой 800\n"
-                "• Продукты 2500\n\n"
-                "Бот автоматически определит категорию и запишет расход!",
-                reply_markup=get_main_menu_keyboard()
-            )
+    elif text == "💸 Добавить расход":
+        await update.message.reply_text(
+            "💸 Для добавления расхода напишите в формате:\n\n"
+            "📝 Описание Сумма\n\n"
+            "Например:\n"
+            "• Обед в кафе 1500\n"
+            "• Такси домой 800\n"
+            "• Продукты 2500\n\n"
+            "Бот автоматически определит категорию и запишет расход!",
+            reply_markup=get_main_menu_keyboard()
+        )
         return
 
     logger.info(f"Получено сообщение: {text}")
@@ -2463,6 +2462,7 @@ def main():
     report_conv_handler = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex("^📊 Отчеты$"), report_menu),
+            MessageHandler(filters.Regex("^(Сегодня|Неделя|Месяц|Год)$"), period_choice),
             CommandHandler("report", report_menu)
         ],
         states={
