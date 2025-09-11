@@ -751,10 +751,14 @@ async def check_folders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         import os
         
+        # Проверяем текущую директорию
+        current_dir = os.getcwd()
+        message = f"📁 Текущая директория: {current_dir}\n\n"
+        
         # Проверяем папку user_data
         if os.path.exists("user_data"):
             folders = os.listdir("user_data")
-            message = f"📁 Папка user_data найдена!\n\nСодержимое:\n"
+            message += f"✅ Папка user_data найдена!\n\nСодержимое:\n"
             for folder in folders:
                 folder_path = f"user_data/{folder}"
                 if os.path.isdir(folder_path):
@@ -763,8 +767,24 @@ async def check_folders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     for file in files:
                         message += f"  📄 {file}\n"
                     message += "\n"
+                else:
+                    message += f"❌ {folder} - не папка\n"
         else:
-            message = "❌ Папка user_data не найдена!"
+            message += "❌ Папка user_data не найдена!\n\n"
+            
+            # Показываем содержимое текущей директории
+            try:
+                all_items = os.listdir(".")
+                message += "📋 Содержимое текущей директории:\n"
+                for item in all_items[:10]:  # Показываем первые 10 элементов
+                    if os.path.isdir(item):
+                        message += f"📂 {item}/\n"
+                    else:
+                        message += f"📄 {item}\n"
+                if len(all_items) > 10:
+                    message += f"... и еще {len(all_items) - 10} элементов\n"
+            except Exception as e:
+                message += f"❌ Ошибка при чтении директории: {e}\n"
         
         await update.message.reply_text(message)
         
@@ -4404,8 +4424,16 @@ def create_user_folder(username: str, folder_name: str, user_id: int) -> tuple[b
         # Убираем множественные подчеркивания
         safe_folder_name = re.sub(r'_+', '_', safe_folder_name).strip('_')
         
+        # Если название пустое после обработки, используем fallback
+        if not safe_folder_name:
+            safe_folder_name = "user_" + str(user_id)
+        
         user_folder_path = f"user_data/{safe_folder_name}"
+        
+        # Создаем папку с логированием
+        logger.info(f"Создание папки: {user_folder_path}")
         os.makedirs(user_folder_path, exist_ok=True)
+        logger.info(f"Папка создана успешно: {user_folder_path}")
         
         # Создаем файл расходов (CSV)
         expenses_file = f"{user_folder_path}/expenses.csv"
@@ -4519,7 +4547,12 @@ def get_user_folder_path(user_id: int) -> str:
         conn.close()
         
         if result and result[0]:
-            settings = json.loads(result[0])
+            settings_data = result[0]
+            # Проверяем, является ли settings_data уже словарем или строкой JSON
+            if isinstance(settings_data, dict):
+                settings = settings_data
+            else:
+                settings = json.loads(settings_data)
             folder_path = settings.get('folder_path', 'user_data/default')
             # Если путь содержит кириллицу, конвертируем его
             if any('\u0400' <= char <= '\u04FF' for char in folder_path):
