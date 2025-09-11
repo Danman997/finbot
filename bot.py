@@ -539,8 +539,15 @@ def add_expense(amount, category, description, transaction_date, user_id=None):
                     create_user_folder(user_id, f"user_{user_id}")
                     folder_path = get_user_folder_path(user_id)
                     if not os.path.exists(folder_path):
-                        logger.error(f"Не удалось создать папку для пользователя {user_id}")
-                        return False
+                        # Создаем папку вручную
+                        os.makedirs(folder_path, exist_ok=True)
+                        # Создаем файл расходов
+                        expenses_file = f"{folder_path}/expenses.csv"
+                        with open(expenses_file, 'w', newline='', encoding='utf-8') as f:
+                            fieldnames = ['id', 'amount', 'description', 'category', 'transaction_date']
+                            writer = csv.DictWriter(f, fieldnames=fieldnames)
+                            writer.writeheader()
+                        logger.info(f"Создана папка и файл расходов для пользователя {user_id}")
                 except Exception as e:
                     logger.error(f"Ошибка при создании папки для пользователя {user_id}: {e}")
                     return False
@@ -830,6 +837,43 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Привет! Я твой помощник по учету расходов. Выбери опцию ниже:",
         reply_markup=get_main_menu_keyboard()
     )
+
+async def debug_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отладочная команда для проверки пользователя"""
+    user_id = update.effective_user.id
+    
+    try:
+        message = f"🔍 Отладка пользователя {user_id}:\n\n"
+        
+        # Проверяем папку пользователя
+        folder_path = get_user_folder_path(user_id)
+        message += f"📁 Папка: {folder_path}\n"
+        
+        if folder_path:
+            if os.path.exists(folder_path):
+                message += "✅ Папка существует\n"
+                files = os.listdir(folder_path)
+                message += f"📄 Файлы: {', '.join(files)}\n"
+            else:
+                message += "❌ Папка не существует\n"
+        else:
+            message += "❌ Не удалось получить путь к папке\n"
+        
+        # Проверяем файл расходов
+        if folder_path and os.path.exists(folder_path):
+            expenses_file = f"{folder_path}/expenses.csv"
+            if os.path.exists(expenses_file):
+                message += "✅ Файл расходов существует\n"
+                with open(expenses_file, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    message += f"📊 Размер файла: {len(content)} символов\n"
+            else:
+                message += "❌ Файл расходов не существует\n"
+        
+        await update.message.reply_text(message)
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка отладки: {e}")
 
 async def test_expense(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Тестовая команда для проверки добавления расхода"""
@@ -2770,6 +2814,7 @@ def main():
     application.add_handler(CommandHandler("menu", start))
     application.add_handler(CommandHandler("check_folders", check_folders))
     application.add_handler(CommandHandler("test_expense", test_expense))
+    application.add_handler(CommandHandler("debug_user", debug_user))
     
     # Обработчик для аутентификации (должен быть перед общим обработчиком сообщений)
     application.add_handler(MessageHandler(
@@ -4774,10 +4819,35 @@ def get_user_folder_path(user_id: int) -> str:
             
             return folder_path
         
-        return "user_data/default"  # Fallback к папке по умолчанию
+        # Если пользователь не найден в базе, создаем папку автоматически
+        logger.warning(f"Пользователь {user_id} не найден в базе. Создаем папку...")
+        try:
+            create_user_folder(user_id, f"user_{user_id}")
+            # Получаем путь к созданной папке
+            conn = get_db_connection()
+            if conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT settings FROM user_folders 
+                    WHERE user_id = %s
+                ''', (user_id,))
+                result = cursor.fetchone()
+                conn.close()
+                
+                if result and result[0]:
+                    settings_data = result[0]
+                    if isinstance(settings_data, dict):
+                        settings = settings_data
+                    else:
+                        settings = json.loads(settings_data)
+                    return settings.get('folder_path', f"user_data/user_{user_id}")
+        except Exception as e:
+            logger.error(f"Ошибка при создании папки для пользователя {user_id}: {e}")
+        
+        return f"user_data/user_{user_id}"  # Fallback к папке пользователя
     except Exception as e:
         logger.error(f"Ошибка при получении пути папки для пользователя {user_id}: {e}")
-        return "user_data/default"  # Fallback к папке по умолчанию
+        return f"user_data/user_{user_id}"  # Fallback к папке пользователя
 
 def get_user_folder_info(username: str, user_id: int) -> dict:
     """Возвращает информацию о папке пользователя из базы данных"""
