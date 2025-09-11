@@ -1728,22 +1728,6 @@ async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     for i, (cat, amt) in enumerate(zip(categories[:5], amounts[:5]), 1):
         summary_text += f"{i}. {cat}: {amt:.2f} Тг\n"
     
-    # Добавляем информацию о предстоящих платежах
-    try:
-        upcoming_reminders = get_all_active_reminders()  # Получаем все активные напоминания
-        if upcoming_reminders:
-            summary_text += "\n⏰ ПРЕДСТОЯЩИЕ ПЛАТЕЖИ:\n"
-            total_upcoming = 0
-            for rem_id, title, desc, amount, start_date, end_date, sent_10, sent_3, created in upcoming_reminders[:5]:  # Показываем топ-5
-                days_left = (end_date - datetime.now().date()).days
-                if days_left > 0:
-                    summary_text += f"• {title}: {amount:.2f} Тг (через {days_left} дней)\n"
-                    total_upcoming += amount
-            if total_upcoming > 0:
-                summary_text += f"💰 Общая сумма: {total_upcoming:.2f} Тг\n"
-    except Exception as e:
-        logger.error(f"Ошибка при получении напоминаний: {e}")
-        # Продолжаем без напоминаний
     
     # Отправка отчета и сводки
     await update.message.reply_photo(photo=buf, caption=summary_text, reply_markup=get_main_menu_keyboard())
@@ -2590,6 +2574,7 @@ def main():
     application.add_handler(analytics_conv_handler)
     application.add_handler(admin_conv_handler)
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("menu", start))
     
     # Обработчик для аутентификации (должен быть перед общим обработчиком сообщений)
     application.add_handler(MessageHandler(
