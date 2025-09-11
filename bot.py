@@ -2073,8 +2073,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         elif context.user_data.get('current_state') == 'reminder_end_date':
             await reminder_end_date_input(update, context)
             return
-    elif text and text[0].isdigit() and "." in text and not any(x in text for x in ["💸", "📊", "⏰", "📅", "📈", "👥"]):
-        # Это выбор по номеру (например "1. Автострахование" или "1. 09.2025")
     elif text in ["💸 Добавить расход", "📊 Отчеты", "Сегодня", "Неделя", "Месяц", "Год"]:
         if text == "💸 Добавить расход":
             await update.message.reply_text(
