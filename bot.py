@@ -526,6 +526,25 @@ def add_expense(amount, category, description, transaction_date, user_id=None):
             import os
             
             folder_path = get_user_folder_path(user_id)
+            logger.info(f"Попытка добавить расход для пользователя {user_id}, папка: {folder_path}")
+            
+            if not folder_path:
+                logger.error(f"Не удалось получить путь к папке пользователя {user_id}")
+                return False
+                
+            if not os.path.exists(folder_path):
+                logger.warning(f"Папка пользователя {user_id} не существует: {folder_path}. Создаем...")
+                # Пытаемся создать папку для пользователя
+                try:
+                    create_user_folder(user_id, f"user_{user_id}")
+                    folder_path = get_user_folder_path(user_id)
+                    if not os.path.exists(folder_path):
+                        logger.error(f"Не удалось создать папку для пользователя {user_id}")
+                        return False
+                except Exception as e:
+                    logger.error(f"Ошибка при создании папки для пользователя {user_id}: {e}")
+                    return False
+                
             expenses_file = f"{folder_path}/expenses.csv"
             
             # Читаем существующие расходы
@@ -555,9 +574,11 @@ def add_expense(amount, category, description, transaction_date, user_id=None):
                 writer.writeheader()
                 writer.writerows(expenses)
             
+            logger.info(f"Расход успешно добавлен в файл {expenses_file}")
             return True
         except Exception as e:
-            logger.error(f"Ошибка при добавлении расхода в файл: {e}")
+            logger.error(f"Ошибка при добавлении расхода в файл для пользователя {user_id}: {e}")
+            logger.error(f"Папка: {folder_path}, файл: {expenses_file}")
             return False
     else:
         # Fallback к базе данных для совместимости
@@ -809,6 +830,27 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Привет! Я твой помощник по учету расходов. Выбери опцию ниже:",
         reply_markup=get_main_menu_keyboard()
     )
+
+async def test_expense(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Тестовая команда для проверки добавления расхода"""
+    user_id = update.effective_user.id
+    
+    try:
+        # Пытаемся добавить тестовый расход
+        amount = 100.0
+        category = "Тест"
+        description = "Тестовый расход"
+        transaction_date = datetime.now(timezone.utc)
+        
+        result = add_expense(amount, category, description, transaction_date, user_id)
+        
+        if result:
+            await update.message.reply_text("✅ Тестовый расход успешно добавлен!")
+        else:
+            await update.message.reply_text("❌ Ошибка при добавлении тестового расхода")
+            
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
 
 async def check_folders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Временная команда для проверки папок пользователей"""
@@ -2727,6 +2769,7 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("menu", start))
     application.add_handler(CommandHandler("check_folders", check_folders))
+    application.add_handler(CommandHandler("test_expense", test_expense))
     
     # Обработчик для аутентификации (должен быть перед общим обработчиком сообщений)
     application.add_handler(MessageHandler(
