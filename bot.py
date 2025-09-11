@@ -589,174 +589,6 @@ def delete_expense(expense_id: int) -> bool:
     finally:
         conn.close()
 
-# --- Функции для работы с напоминаниями ---
-def add_payment_reminder(title, description, amount, start_date, end_date):
-    """Добавить новое напоминание о платеже"""
-    conn = get_db_connection()
-    if not conn:
-        return False
-    try:
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO payment_reminders (title, description, amount, start_date, end_date)
-            VALUES (%s, %s, %s, %s, %s)
-        ''', (title, description, amount, start_date, end_date))
-        conn.commit()
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка при добавлении напоминания: {e}")
-        return False
-    finally:
-        conn.close()
-
-def get_all_active_reminders():
-    """Получить все активные напоминания"""
-    conn = get_db_connection()
-    if not conn:
-        return []
-    try:
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT id, title, description, amount, start_date, end_date, 
-                   reminder_10_days, reminder_3_days, created_at
-            FROM payment_reminders 
-            WHERE is_active = TRUE 
-            ORDER BY end_date ASC
-        ''')
-        return cursor.fetchall()
-    except Exception as e:
-        logger.error(f"Ошибка при получении напоминаний: {e}")
-        return []
-    finally:
-        conn.close()
-
-def get_upcoming_reminders(days_ahead=30):
-    """Получить напоминания, которые скоро истекают"""
-    conn = get_db_connection()
-    if not conn:
-        return []
-    try:
-        cursor = conn.cursor()
-        future_date = datetime.now().date() + timedelta(days=days_ahead)
-        cursor.execute('''
-            SELECT id, title, description, amount, start_date, end_date, 
-                   reminder_10_days, reminder_3_days
-            FROM payment_reminders 
-            WHERE is_active = TRUE AND end_date <= %s
-            ORDER BY end_date ASC
-        ''', (future_date,))
-        return cursor.fetchall()
-    except Exception as e:
-        logger.error(f"Ошибка при получении предстоящих напоминаний: {e}")
-        return []
-    finally:
-        conn.close()
-
-def mark_reminder_sent(reminder_id, reminder_type):
-    """Отметить, что напоминание было отправлено"""
-    conn = get_db_connection()
-    if not conn:
-        return False
-    try:
-        cursor = conn.cursor()
-        if reminder_type == '10_days':
-            cursor.execute('''
-                UPDATE payment_reminders SET reminder_10_days = TRUE WHERE id = %s
-            ''', (reminder_id,))
-        elif reminder_type == '3_days':
-            cursor.execute('''
-                UPDATE payment_reminders SET reminder_3_days = TRUE WHERE id = %s
-            ''', (reminder_id,))
-        conn.commit()
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка при обновлении статуса напоминания: {e}")
-        return False
-    finally:
-        conn.close()
-
-def deactivate_expired_reminder(reminder_id):
-    """Деактивировать истекшее напоминание"""
-    conn = get_db_connection()
-    if not conn:
-        return False
-    try:
-        cursor = conn.cursor()
-        cursor.execute('''
-            UPDATE payment_reminders SET is_active = FALSE WHERE id = %s
-        ''', (reminder_id,))
-        conn.commit()
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка при деактивации напоминания: {e}")
-        return False
-    finally:
-        conn.close()
-
-def delete_reminder(reminder_id):
-    """Удалить напоминание"""
-    conn = get_db_connection()
-    if not conn:
-        return False
-    try:
-        cursor = conn.cursor()
-        cursor.execute('DELETE FROM payment_reminders WHERE id = %s', (reminder_id,))
-        conn.commit()
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка при удалении напоминания: {e}")
-        return False
-    finally:
-        conn.close()
-
-async def check_and_send_reminders(application):
-    """Проверка и отправка автоматических напоминаний"""
-    try:
-        reminders = get_upcoming_reminders(15)  # Проверяем на 15 дней вперед
-        current_date = datetime.now().date()
-        
-        for reminder in reminders:
-            rem_id, title, desc, amount, start_date, end_date, sent_10, sent_3 = reminder
-            days_left = (end_date - current_date).days
-            
-            # Проверяем, нужно ли отправить напоминание за 10 дней
-            if days_left == 10 and not sent_10:
-                message_text = f"⚠️ НАПОМИНАНИЕ О ПЛАТЕЖЕ!\n\n"
-                message_text += f"📋 {title}\n"
-                if desc:
-                    message_text += f"📝 {desc}\n"
-                message_text += f"💰 Сумма: {amount:.2f} Тг\n"
-                message_text += f"📅 Срок действия истекает: {end_date.strftime('%d.%m.%Y')}\n"
-                message_text += f"⏰ Осталось дней: {days_left}\n\n"
-                message_text += f"💡 Не забудьте оплатить вовремя!"
-                
-                # Отправляем напоминание всем активным чатам
-                # В реальном боте здесь нужно получить список пользователей
-                # Пока что просто логируем
-                logger.info(f"Отправлено напоминание за 10 дней: {title}")
-                mark_reminder_sent(rem_id, '10_days')
-            
-            # Проверяем, нужно ли отправить напоминание за 3 дня
-            elif days_left == 3 and not sent_3:
-                message_text = f"🚨 СРОЧНОЕ НАПОМИНАНИЕ О ПЛАТЕЖЕ!\n\n"
-                message_text += f"📋 {title}\n"
-                if desc:
-                    message_text += f"📝 {desc}\n"
-                message_text += f"💰 Сумма: {amount:.2f} Тг\n"
-                message_text += f"📅 Срок действия истекает: {end_date.strftime('%d.%m.%Y')}\n"
-                message_text += f"⏰ Осталось дней: {days_left}\n\n"
-                message_text += f"🔥 Оплатите сегодня, чтобы не было проблем!"
-                
-                logger.info(f"Отправлено срочное напоминание за 3 дня: {title}")
-                mark_reminder_sent(rem_id, '3_days')
-            
-            # Деактивируем истекшие напоминания
-            elif days_left < 0:
-                deactivate_expired_reminder(rem_id)
-                logger.info(f"Деактивировано истекшее напоминание: {title}")
-                
-    except Exception as e:
-        logger.error(f"Ошибка при проверке напоминаний: {e}")
 
 # --- ЗАЩИТА БЛОКОВ ---
 # Константы для защиты блоков от несанкционированных изменений
@@ -1803,564 +1635,6 @@ async def manual_training(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             reply_markup=get_main_menu_keyboard()
         )
 
-# --- Функции для работы с напоминаниями ---
-async def reminder_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Главное меню напоминаний"""
-    user_id = update.effective_user.id
-    
-    # Проверяем защиту блока напоминаний
-    if not validate_block_access("reminders", user_id):
-        await update.message.reply_text(
-            "❌ Доступ к напоминаниям ограничен.",
-            reply_markup=get_main_menu_keyboard()
-        )
-        return ConversationHandler.END
-    
-    text = update.message.text
-    
-    # Если это первое нажатие на кнопку "⏰ Напоминания"
-    if text == "⏰ Напоминания":
-        await update.message.reply_text(
-            "Выберите действие для напоминаний:",
-            reply_markup=ReplyKeyboardMarkup([
-                ["📝 Добавить напоминание", "📋 Список напоминаний"], 
-                ["🗑️ Удалить напоминание", "🔙 Назад"]
-            ], resize_keyboard=True)
-        )
-        context.user_data['current_state'] = 'reminder_menu'
-        return REMINDER_MENU_STATE
-    
-    # Обработка выбора в меню напоминаний
-    elif text == "📝 Добавить напоминание":
-        await update.message.reply_text(
-            "Введите название напоминания:",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        return REMINDER_TITLE_STATE
-    
-    elif text == "📋 Список напоминаний":
-        reminders = get_all_active_reminders()
-        if not reminders:
-            await update.message.reply_text(
-                "У вас нет активных напоминаний.",
-                reply_markup=get_main_menu_keyboard()
-            )
-            return ConversationHandler.END
-        
-        reminders_text = "📋 Ваши активные напоминания:\n\n"
-        total_amount = 0
-        
-        for i, (rem_id, title, desc, amount, start_date, end_date, sent_10, sent_3, created) in enumerate(reminders, 1):
-            days_left = (end_date - datetime.now().date()).days
-            status = "🟢 Активно" if days_left > 0 else "🔴 Истекло"
-            
-            reminders_text += f"{i}. {title}\n"
-            if desc:
-                reminders_text += f"   📝 {desc}\n"
-            reminders_text += f"   💰 {amount:.2f} Тг\n"
-            reminders_text += f"   📅 {start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')}\n"
-            reminders_text += f"   {status} (осталось {days_left} дней)\n\n"
-            
-            total_amount += amount
-        
-        reminders_text += f"💰 Общая сумма к оплате: {total_amount:.2f} Тг"
-        
-        # Добавляем кнопки управления
-        keyboard = [
-            ["✏️ Редактировать напоминание", "🗑️ Удалить напоминание"],
-            ["🔙 Назад"]
-        ]
-        
-        await update.message.reply_text(
-            reminders_text,
-            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        )
-        
-        # Сохраняем список напоминаний в контексте для последующего выбора
-        context.user_data['reminders_list'] = reminders
-        return REMINDER_MENU_STATE
-    
-    elif text == "✏️ Редактировать напоминание":
-        reminders = context.user_data.get('reminders_list', [])
-        if not reminders:
-            await update.message.reply_text(
-                "Список напоминаний не найден. Попробуйте сначала открыть список напоминаний.",
-                reply_markup=get_main_menu_keyboard()
-            )
-            return ConversationHandler.END
-        
-        # Показываем список для выбора
-        reminders_text = "✏️ Выберите напоминание для редактирования:\n\n"
-        keyboard = []
-        
-        for i, (rem_id, title, desc, amount, start_date, end_date, sent_10, sent_3, created) in enumerate(reminders, 1):
-            days_left = (end_date - datetime.now().date()).days
-            status = "🟢" if days_left > 0 else "🔴"
-            
-            reminders_text += f"{i}. {status} {title} - {amount:.2f} Тг\n"
-            keyboard.append([KeyboardButton(f"✏️ {i}. {title}")])
-        
-        keyboard.append([KeyboardButton("🔙 Назад")])
-        
-        await update.message.reply_text(
-            reminders_text,
-            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        )
-        context.user_data['current_state'] = 'reminder_edit_choice'
-        return REMINDER_EDIT_CHOICE_STATE
-    
-    elif text == "🗑️ Удалить напоминание":
-        reminders = get_all_active_reminders()
-        if not reminders:
-            await update.message.reply_text(
-                "У вас нет активных напоминаний для удаления.",
-                reply_markup=get_main_menu_keyboard()
-            )
-            return ConversationHandler.END
-        
-        reminders_text = "🗑️ Выберите напоминание для удаления:\n\n"
-        keyboard = []
-        
-        for i, (rem_id, title, desc, amount, start_date, end_date, sent_10, sent_3, created) in enumerate(reminders, 1):
-            days_left = (end_date - datetime.now().date()).days
-            reminders_text += f"{i}. {title} - {amount:.2f} Тг (осталось {days_left} дней)\n"
-            keyboard.append([KeyboardButton(f"❌ Удалить {i}")])
-        
-        keyboard.append([KeyboardButton("🔙 Назад")])
-        
-        await update.message.reply_text(
-            reminders_text,
-            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        )
-        context.user_data['reminders_list'] = reminders
-        return REMINDER_DELETE_STATE
-    
-    elif text == "🔙 Назад":
-        await update.message.reply_text(
-            "Возвращаюсь в главное меню:",
-            reply_markup=get_main_menu_keyboard()
-        )
-        return ConversationHandler.END
-    
-    return REMINDER_MENU_STATE
-
-async def reminder_edit_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обработка выбора напоминания для редактирования"""
-    text = update.message.text
-    
-    if text == "🔙 Назад":
-        context.user_data.pop('current_state', None)
-        await update.message.reply_text(
-            "Выберите действие для напоминаний:",
-            reply_markup=ReplyKeyboardMarkup([
-                ["📝 Добавить напоминание", "📋 Список напоминаний"], 
-                ["🗑️ Удалить напоминание", "🔙 Назад"]
-            ], resize_keyboard=True)
-        )
-        return REMINDER_MENU_STATE
-    
-    # Парсим выбор пользователя
-    if text.startswith("✏️ "):
-        try:
-            # Извлекаем номер из текста "✏️ 1. Название"
-            choice_num = int(text.split(".")[0].split()[-1]) - 1
-            reminders = context.user_data.get('reminders_list', [])
-            
-            if 0 <= choice_num < len(reminders):
-                selected_reminder = reminders[choice_num]
-                context.user_data['editing_reminder'] = selected_reminder
-                
-                rem_id, title, desc, amount, start_date, end_date, sent_10, sent_3, created = selected_reminder
-                
-                await update.message.reply_text(
-                    f"✏️ Редактирование напоминания:\n\n"
-                    f"📝 Текущее название: {title}\n"
-                    f"📄 Описание: {desc or 'Не указано'}\n"
-                    f"💰 Сумма: {amount:.2f} Тг\n"
-                    f"📅 Период: {start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')}\n\n"
-                    f"Введите новое название (или отправьте текущее без изменений):",
-                    reply_markup=ReplyKeyboardRemove()
-                )
-                return REMINDER_EDIT_TITLE_STATE
-            else:
-                await update.message.reply_text(
-                    "❌ Неверный выбор. Попробуйте снова.",
-                    reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
-                )
-                return REMINDER_EDIT_CHOICE_STATE
-        except (ValueError, IndexError):
-            await update.message.reply_text(
-                "❌ Неверный формат. Попробуйте снова.",
-                reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
-            )
-            return REMINDER_EDIT_CHOICE_STATE
-    
-    # Обрабатываем выбор по номеру (например "1. Автострахование")
-    elif text and text[0].isdigit() and "." in text:
-        try:
-            # Извлекаем номер из текста "1. Название"
-            choice_num = int(text.split(".")[0]) - 1
-            reminders = context.user_data.get('reminders_list', [])
-            
-            if 0 <= choice_num < len(reminders):
-                selected_reminder = reminders[choice_num]
-                context.user_data['editing_reminder'] = selected_reminder
-                
-                rem_id, title, desc, amount, start_date, end_date, sent_10, sent_3, created = selected_reminder
-                
-                await update.message.reply_text(
-                    f"✏️ Редактирование напоминания:\n\n"
-                    f"📝 Текущее название: {title}\n"
-                    f"📄 Описание: {desc or 'Не указано'}\n"
-                    f"💰 Сумма: {amount:.2f} Тг\n"
-                    f"📅 Период: {start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')}\n\n"
-                    f"Введите новое название (или отправьте текущее без изменений):",
-                    reply_markup=ReplyKeyboardRemove()
-                )
-                return REMINDER_EDIT_TITLE_STATE
-            else:
-                await update.message.reply_text(
-                    "❌ Неверный выбор. Попробуйте снова.",
-                    reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
-                )
-                return REMINDER_EDIT_CHOICE_STATE
-        except (ValueError, IndexError):
-            await update.message.reply_text(
-                "❌ Неверный формат. Попробуйте снова.",
-                reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
-            )
-            return REMINDER_EDIT_CHOICE_STATE
-    
-    return REMINDER_EDIT_CHOICE_STATE
-
-async def reminder_edit_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Редактирование названия напоминания"""
-    new_title = update.message.text.strip()
-    if not new_title:
-        await update.message.reply_text(
-            "Название не может быть пустым. Введите новое название:",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        return REMINDER_EDIT_TITLE_STATE
-    
-    context.user_data['new_title'] = new_title
-    
-    selected_reminder = context.user_data.get('editing_reminder')
-    rem_id, title, desc, amount, start_date, end_date, sent_10, sent_3, created = selected_reminder
-    
-    await update.message.reply_text(
-        f"📝 Новое название: {new_title}\n\n"
-        f"Введите новое описание (или '-' для удаления, или отправьте текущее без изменений):",
-        reply_markup=ReplyKeyboardRemove()
-    )
-    return REMINDER_EDIT_DESC_STATE
-
-async def reminder_edit_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Редактирование описания напоминания"""
-    new_desc = update.message.text.strip()
-    if new_desc == '-':
-        new_desc = None
-    
-    context.user_data['new_desc'] = new_desc
-    
-    selected_reminder = context.user_data.get('editing_reminder')
-    rem_id, title, desc, amount, start_date, end_date, sent_10, sent_3, created = selected_reminder
-    
-    await update.message.reply_text(
-        f"📄 Новое описание: {new_desc or 'Не указано'}\n\n"
-        f"Введите новую сумму (или отправьте текущую без изменений):",
-        reply_markup=ReplyKeyboardRemove()
-    )
-    return REMINDER_EDIT_AMOUNT_STATE
-
-async def reminder_edit_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Редактирование суммы напоминания"""
-    try:
-        new_amount = float(update.message.text.replace(',', '.'))
-        if new_amount <= 0:
-            raise ValueError
-    except ValueError:
-        await update.message.reply_text(
-            "❌ Неверная сумма. Введите положительное число:",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        return REMINDER_EDIT_AMOUNT_STATE
-    
-    context.user_data['new_amount'] = new_amount
-    
-    selected_reminder = context.user_data.get('editing_reminder')
-    rem_id, title, desc, amount, start_date, end_date, sent_10, sent_3, created = selected_reminder
-    
-    await update.message.reply_text(
-        f"💰 Новая сумма: {new_amount:.2f} Тг\n\n"
-        f"Введите новые даты в формате ДД.ММ.ГГГГ - ДД.ММ.ГГГГ\n"
-        f"Текущий период: {start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')}\n"
-        f"Или отправьте текущий период без изменений:",
-        reply_markup=ReplyKeyboardRemove()
-    )
-    return REMINDER_EDIT_DATES_STATE
-
-async def reminder_edit_dates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Редактирование дат напоминания"""
-    dates_text = update.message.text.strip()
-    
-    try:
-        if ' - ' in dates_text:
-            start_str, end_str = dates_text.split(' - ')
-            new_start_date = datetime.strptime(start_str.strip(), '%d.%m.%Y').date()
-            new_end_date = datetime.strptime(end_str.strip(), '%d.%m.%Y').date()
-        else:
-            # Если пользователь отправил текущие даты без изменений
-            selected_reminder = context.user_data.get('editing_reminder')
-            rem_id, title, desc, amount, start_date, end_date, sent_10, sent_3, created = selected_reminder
-            new_start_date = start_date
-            new_end_date = end_date
-        
-        if new_start_date >= new_end_date:
-            raise ValueError("Дата начала должна быть раньше даты окончания")
-            
-    except ValueError as e:
-        await update.message.reply_text(
-            f"❌ Неверный формат дат. {str(e)}\n"
-            f"Введите даты в формате ДД.ММ.ГГГГ - ДД.ММ.ГГГГ:",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        return REMINDER_EDIT_DATES_STATE
-    
-    # Сохраняем изменения в базу данных
-    selected_reminder = context.user_data.get('editing_reminder')
-    rem_id, title, desc, amount, start_date, end_date, sent_10, sent_3, created = selected_reminder
-    
-    new_title = context.user_data.get('new_title', title)
-    new_desc = context.user_data.get('new_desc', desc)
-    new_amount = context.user_data.get('new_amount', amount)
-    
-    # Обновляем напоминание в базе данных
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            cursor.execute('''
-                UPDATE payment_reminders 
-                SET title = %s, description = %s, amount = %s, 
-                    start_date = %s, end_date = %s, sent_10_days = FALSE, sent_3_days = FALSE
-                WHERE id = %s
-            ''', (new_title, new_desc, new_amount, new_start_date, new_end_date, rem_id))
-            conn.commit()
-            
-            await update.message.reply_text(
-                f"✅ Напоминание успешно обновлено!\n\n"
-                f"📝 Название: {new_title}\n"
-                f"📄 Описание: {new_desc or 'Не указано'}\n"
-                f"💰 Сумма: {new_amount:.2f} Тг\n"
-                f"📅 Период: {new_start_date.strftime('%d.%m.%Y')} - {new_end_date.strftime('%d.%m.%Y')}",
-                reply_markup=get_main_menu_keyboard()
-            )
-        except Exception as e:
-            logger.error(f"Ошибка при обновлении напоминания: {e}")
-            await update.message.reply_text(
-                "❌ Ошибка при обновлении напоминания. Попробуйте снова.",
-                reply_markup=get_main_menu_keyboard()
-            )
-        finally:
-            conn.close()
-    else:
-        await update.message.reply_text(
-            "❌ Ошибка подключения к базе данных.",
-            reply_markup=get_main_menu_keyboard()
-        )
-    
-    # Очищаем контекст
-    context.user_data.pop('editing_reminder', None)
-    context.user_data.pop('new_title', None)
-    context.user_data.pop('new_desc', None)
-    context.user_data.pop('new_amount', None)
-    context.user_data.pop('current_state', None)
-    
-    return ConversationHandler.END
-
-async def reminder_title_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обработка ввода названия напоминания"""
-    title = update.message.text.strip()
-    if not title:
-        await update.message.reply_text(
-            "Название не может быть пустым. Попробуйте снова:",
-            reply_markup=get_main_menu_keyboard()
-        )
-        return ConversationHandler.END
-    
-    context.user_data['reminder_title'] = title
-    
-    await update.message.reply_text(
-        f"Название: {title}\n\n"
-        "Теперь введите описание (или отправьте '-' если описание не нужно):",
-        reply_markup=ReplyKeyboardRemove()
-    )
-    return REMINDER_DESC_STATE
-
-async def reminder_desc_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обработка ввода описания напоминания"""
-    desc = update.message.text.strip()
-    if desc == '-':
-        desc = None
-    
-    context.user_data['reminder_desc'] = desc
-    
-    await update.message.reply_text(
-        f"Название: {context.user_data['reminder_title']}\n"
-        f"Описание: {desc or 'Не указано'}\n\n"
-        "Теперь введите сумму (например: 25000):",
-        reply_markup=ReplyKeyboardRemove()
-    )
-    return REMINDER_AMOUNT_STATE
-
-async def reminder_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обработка ввода суммы напоминания"""
-    try:
-        amount = float(update.message.text.replace(',', '.'))
-        if amount <= 0:
-            raise ValueError("Сумма должна быть положительной")
-    except ValueError:
-        await update.message.reply_text(
-            "Неверный формат суммы. Введите число больше 0:",
-            reply_markup=get_main_menu_keyboard()
-        )
-        return ConversationHandler.END
-    
-    context.user_data['reminder_amount'] = amount
-    
-    await update.message.reply_text(
-        f"Название: {context.user_data['reminder_title']}\n"
-        f"Описание: {context.user_data['reminder_desc'] or 'Не указано'}\n"
-        f"Сумма: {amount:.2f} Тг\n\n"
-        "Теперь введите дату начала в формате ДД.ММ.ГГГГ (например: 20.08.2025):",
-        reply_markup=ReplyKeyboardRemove()
-    )
-    return REMINDER_START_DATE_STATE
-
-async def reminder_start_date_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обработка ввода даты начала"""
-    try:
-        start_date = datetime.strptime(update.message.text, '%d.%m.%Y').date()
-    except ValueError:
-        await update.message.reply_text(
-            "Неверный формат даты. Используйте формат ДД.ММ.ГГГГ:",
-            reply_markup=get_main_menu_keyboard()
-        )
-        return ConversationHandler.END
-    
-    context.user_data['reminder_start_date'] = start_date
-    
-    await update.message.reply_text(
-        f"Название: {context.user_data['reminder_title']}\n"
-        f"Описание: {context.user_data['reminder_desc'] or 'Не указано'}\n"
-        f"Сумма: {context.user_data['reminder_amount']:.2f} Тг\n"
-        f"Дата начала: {start_date.strftime('%d.%m.%Y')}\n\n"
-        "Теперь введите дату окончания в формате ДД.ММ.ГГГГ (например: 19.08.2026):",
-        reply_markup=ReplyKeyboardRemove()
-    )
-    return REMINDER_END_DATE_STATE
-
-async def reminder_end_date_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обработка ввода даты окончания"""
-    try:
-        end_date = datetime.strptime(update.message.text, '%d.%m.%Y').date()
-        start_date = context.user_data['reminder_start_date']
-        
-        if end_date <= start_date:
-            await update.message.reply_text(
-                "Дата окончания должна быть позже даты начала. Попробуйте снова:",
-                reply_markup=get_main_menu_keyboard()
-            )
-            return ConversationHandler.END
-            
-    except ValueError:
-        await update.message.reply_text(
-            "Неверный формат даты. Используйте формат ДД.ММ.ГГГГ:",
-            reply_markup=get_main_menu_keyboard()
-        )
-        return ConversationHandler.END
-    
-    # Сохраняем напоминание в базу данных
-    title = context.user_data['reminder_title']
-    desc = context.user_data['reminder_desc']
-    amount = context.user_data['reminder_amount']
-    start_date = context.user_data['reminder_start_date']
-    
-    if add_payment_reminder(title, desc, amount, start_date, end_date):
-        days_left = (end_date - datetime.now().date()).days
-        
-        await update.message.reply_text(
-            f"✅ Напоминание успешно добавлено!\n\n"
-            f"📋 {title}\n"
-            f"📝 {desc or 'Описание не указано'}\n"
-            f"💰 {amount:.2f} Тг\n"
-            f"📅 {start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')}\n"
-            f"⏰ Осталось дней: {days_left}\n\n"
-            f"Бот будет напоминать о необходимости оплаты за 10 и 3 дня до истечения срока.",
-            reply_markup=get_main_menu_keyboard()
-        )
-    else:
-        await update.message.reply_text(
-            "❌ Ошибка при сохранении напоминания. Попробуйте снова.",
-            reply_markup=get_main_menu_keyboard()
-        )
-    
-    # Очищаем данные
-    context.user_data.clear()
-    return ConversationHandler.END
-
-async def reminder_manage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Управление напоминаниями (удаление)"""
-    text = update.message.text
-    
-    if text == "🔙 Назад":
-        await update.message.reply_text(
-            "Возвращаюсь в меню напоминаний:",
-            reply_markup=ReplyKeyboardMarkup([
-                ["📝 Добавить напоминание", "📋 Список напоминаний"], 
-                ["🔙 Назад"]
-            ], resize_keyboard=True)
-        )
-        return REMINDER_MENU_STATE
-    
-    # Проверяем формат "❌ Удалить N"
-    if text.startswith("❌ Удалить "):
-        try:
-            reminder_num = int(text.split()[-1]) - 1
-            reminders = context.user_data.get('reminders_list', [])
-            
-            if 0 <= reminder_num < len(reminders):
-                reminder = reminders[reminder_num]
-                reminder_id = reminder[0]
-                reminder_title = reminder[1]
-                
-                if delete_reminder(reminder_id):
-                    await update.message.reply_text(
-                        f"✅ Напоминание '{reminder_title}' успешно удалено!",
-                        reply_markup=get_main_menu_keyboard()
-                    )
-                    return ConversationHandler.END
-                else:
-                    await update.message.reply_text(
-                        "❌ Ошибка при удалении напоминания. Попробуйте снова.",
-                        reply_markup=get_main_menu_keyboard()
-                    )
-            else:
-                await update.message.reply_text(
-                    "Неверный номер напоминания.",
-                    reply_markup=get_main_menu_keyboard()
-                )
-                return ConversationHandler.END
-                
-        except (ValueError, IndexError):
-            await update.message.reply_text(
-                "Неверный формат команды.",
-                reply_markup=get_main_menu_keyboard()
-            )
-            return ConversationHandler.END
-    
-    return ConversationHandler.END
 
 async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     period_text = update.message.text.lower()
@@ -2739,9 +2013,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     elif text == "📚 Обучить модель":
         await manual_training(update, context)
         return
-    elif text == "⏰ Напоминания":
-        await reminder_menu(update, context)
-        return
     elif text == "📅 Планирование":
         await planning_menu(update, context)
         return
@@ -2751,83 +2022,59 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     elif text == "👥 Управление группой":
         await group_management_menu(update, context)
         return
-    elif text == "✏️ Редактировать напоминание":
-        await reminder_menu(update, context)
-        return
-    elif text == "✏️ Редактировать план":
-        await planning_menu(update, context)
-        return
-    elif text == "🗑️ Удалить напоминание":
+    elif text == "⏰ Напоминания":
         await reminder_menu(update, context)
         return
     elif text == "🗑️ Удалить план":
         await planning_menu(update, context)
         return
-    elif text == "📋 Список напоминаний":
-        await reminder_menu(update, context)
-        return
     elif text == "📋 Список планов":
         await planning_menu(update, context)
         return
-    # Проверяем кнопки редактирования планов
-    elif text in ["✏️ Изменить месяц", "✏️ Изменить сумму", "✏️ Редактировать категории", "✏️ Добавить категорию", "✅ Сохранить изменения", "❌ Отменить"]:
-        if context.user_data.get('current_state') == 'plan_edit_details':
-            await planning_edit_details(update, context)
+    elif text == "🗑️ Удалить статью бюджета":
+        await budget_item_delete_menu(update, context)
+        return
+    elif text == "➕ Добавить статью бюджета":
+        await budget_item_add_menu(update, context)
+        return
+    elif text.startswith("🗑️ Удалить ") and text.split()[-1].isdigit():
+        if context.user_data.get('current_state') == 'budget_item_delete_choice':
+            await budget_item_delete_confirm(update, context)
             return
-    # Проверяем кнопки редактирования напоминаний
-    elif text in ["✏️ Редактировать напоминание", "🗑️ Удалить напоминание", "📋 Список напоминаний"]:
+    elif text in CATEGORIES or text == "➕ Добавить новую категорию" or text == "✅ Готово":
+        if context.user_data.get('current_state') == 'budget_item_add_category':
+            await budget_item_add_category(update, context)
+            return
+    elif text and text.replace('.', '').replace(',', '').isdigit():
+        if context.user_data.get('current_state') == 'budget_item_add_amount':
+            await budget_item_add_amount(update, context)
+            return
+    elif text and not any(x in text for x in ["💸", "📊", "⏰", "📅", "📈", "👥", "🗑️", "➕"]):
+        if context.user_data.get('current_state') == 'budget_item_add_new_category':
+            await budget_item_add_new_category(update, context)
+            return
+    elif text.startswith("❌ Удалить ") and text.split()[-1].isdigit():
         if context.user_data.get('current_state') == 'reminder_menu':
-            await reminder_menu(update, context)
+            await reminder_delete_confirm(update, context)
             return
-    # Проверяем кнопки редактирования планов
-    elif text in ["✏️ Редактировать план", "🗑️ Удалить план", "📋 Список планов"]:
-        if context.user_data.get('current_state') == 'plan_menu':
-            await planning_menu(update, context)
+    elif text and not any(x in text for x in ["💸", "📊", "⏰", "📅", "📈", "👥", "🗑️", "➕", "❌"]):
+        if context.user_data.get('current_state') == 'reminder_title':
+            await reminder_title_input(update, context)
             return
-    # Проверяем кнопки выбора категорий для редактирования
-    elif text and text.startswith("✏️ ") and text[2:].replace(".", "").replace(" ", "").isdigit():
-        # Это выбор категории по номеру (например "✏️ 5. Авто")
-        if context.user_data.get('current_state') == 'plan_edit_category_choice':
-            await planning_edit_category_choice(update, context)
+        elif context.user_data.get('current_state') == 'reminder_desc':
+            await reminder_desc_input(update, context)
             return
-    # Проверяем выбор элементов для редактирования
-    elif text and text.startswith("✏️ ") and "." in text:
-        # Это выбор элемента для редактирования - передаем в соответствующий обработчик
-        if context.user_data.get('current_state') == 'reminder_edit_choice':
-            await reminder_edit_choice(update, context)
+        elif context.user_data.get('current_state') == 'reminder_amount':
+            await reminder_amount_input(update, context)
             return
-        elif context.user_data.get('current_state') == 'plan_edit_choice':
-            await planning_edit_choice(update, context)
+        elif context.user_data.get('current_state') == 'reminder_start_date':
+            await reminder_start_date_input(update, context)
+            return
+        elif context.user_data.get('current_state') == 'reminder_end_date':
+            await reminder_end_date_input(update, context)
             return
     elif text and text[0].isdigit() and "." in text and not any(x in text for x in ["💸", "📊", "⏰", "📅", "📈", "👥"]):
         # Это выбор по номеру (например "1. Автострахование" или "1. 09.2025")
-        if context.user_data.get('current_state') == 'reminder_edit_choice':
-            await reminder_edit_choice(update, context)
-            return
-        elif context.user_data.get('current_state') == 'plan_edit_choice':
-            await planning_edit_choice(update, context)
-            return
-    # Проверяем выбор плана по дате (например "✏️ 1.09.2025")
-    elif text and text.startswith("✏️ ") and len(text.split(".")) == 3:
-        if context.user_data.get('current_state') == 'plan_edit_choice':
-            await planning_edit_choice(update, context)
-            return
-    elif text and text.replace('.', '').replace(',', '').isdigit():
-        # Это числовой ввод - проверяем состояние
-        if context.user_data.get('current_state') == 'plan_edit_total':
-            await planning_edit_total(update, context)
-            return
-        elif context.user_data.get('current_state') == 'plan_edit_amount':
-            await planning_edit_amount(update, context)
-            return
-        elif context.user_data.get('current_state') == 'reminder_edit_amount':
-            await reminder_edit_amount(update, context)
-            return
-    elif text and '.' in text and len(text.split('.')) == 2:
-        # Это может быть ввод месяца (ММ.ГГГГ) - проверяем состояние
-        if context.user_data.get('current_state') == 'plan_edit_month':
-            await planning_edit_month(update, context)
-            return
     elif text in ["💸 Добавить расход", "📊 Отчеты", "Сегодня", "Неделя", "Месяц", "Год"]:
         if text == "💸 Добавить расход":
             await update.message.reply_text(
@@ -2894,13 +2141,7 @@ REMINDER_DESC_STATE = 11
 REMINDER_AMOUNT_STATE = 12
 REMINDER_START_DATE_STATE = 13
 REMINDER_END_DATE_STATE = 14
-REMINDER_MANAGE_STATE = 15
-REMINDER_DELETE_STATE = 16
-REMINDER_EDIT_CHOICE_STATE = 17
-REMINDER_EDIT_TITLE_STATE = 18
-REMINDER_EDIT_DESC_STATE = 19
-REMINDER_EDIT_AMOUNT_STATE = 20
-REMINDER_EDIT_DATES_STATE = 21
+REMINDER_DELETE_STATE = 15
 
 # --- Доп. состояния для планирования бюджета ---
 PLAN_MENU_STATE = 22
@@ -2911,14 +2152,6 @@ PLAN_AMOUNT_STATE = 26
 PLAN_COMMENT_STATE = 27
 PLAN_SUMMARY_STATE = 28
 PLAN_DELETE_STATE = 29
-PLAN_EDIT_CHOICE_STATE = 33
-PLAN_EDIT_MONTH_STATE = 34
-PLAN_EDIT_TOTAL_STATE = 35
-PLAN_EDIT_CATEGORY_STATE = 36
-PLAN_EDIT_AMOUNT_STATE = 37
-PLAN_EDIT_COMMENT_STATE = 38
-PLAN_EDIT_DETAILS_STATE = 39
-PLAN_EDIT_CATEGORY_CHOICE_STATE = 40
 
 # --- Состояния для аналитики ---
 ANALYTICS_MENU_STATE = 30
@@ -3260,33 +2493,6 @@ def main():
         allow_reentry=True
     )
 
-    # Обработчик для напоминаний
-    reminder_conv_handler = ConversationHandler(
-        entry_points=[
-            MessageHandler(filters.Regex("^⏰ Напоминания$"), reminder_menu),
-            CommandHandler("reminders", reminder_menu)
-        ],
-        states={
-            REMINDER_MENU_STATE: [
-                MessageHandler(filters.Regex("^(📝 Добавить напоминание|📋 Список напоминаний|🗑️ Удалить напоминание|✏️ Редактировать напоминание|🔙 Назад)$"), reminder_menu),
-                MessageHandler(filters.Regex("^⏰ Напоминания$"), reminder_menu)
-            ],
-            REMINDER_TITLE_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_title_input)],
-            REMINDER_DESC_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_desc_input)],
-            REMINDER_AMOUNT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_amount_input)],
-            REMINDER_START_DATE_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_start_date_input)],
-            REMINDER_END_DATE_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_end_date_input)],
-            REMINDER_MANAGE_STATE: [MessageHandler(filters.Regex("^(❌ Удалить \d+|🔙 Назад)$"), reminder_manage)],
-            REMINDER_DELETE_STATE: [MessageHandler(filters.Regex("^(❌ Удалить \d+|🔙 Назад)$"), reminder_delete_confirm)],
-            REMINDER_EDIT_CHOICE_STATE: [MessageHandler(filters.Regex("^(✏️ \d+\.|\d+\.|🔙 Назад)$"), reminder_edit_choice)],
-            REMINDER_EDIT_TITLE_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_edit_title)],
-            REMINDER_EDIT_DESC_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_edit_desc)],
-            REMINDER_EDIT_AMOUNT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_edit_amount)],
-            REMINDER_EDIT_DATES_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_edit_dates)],
-        },
-        fallbacks=[CommandHandler("start", start)],
-        allow_reentry=True
-    )
     
     # Обработчик для планирования бюджета
     planning_conv_handler = ConversationHandler(
@@ -3306,20 +2512,6 @@ def main():
             PLAN_AMOUNT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_amount)],
             PLAN_COMMENT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_comment)],
             PLAN_DELETE_STATE: [MessageHandler(filters.Regex("^(❌ Удалить план \d+|🔙 Назад)$"), planning_delete_confirm)],
-            PLAN_EDIT_CHOICE_STATE: [MessageHandler(filters.Regex("^(✏️ \d+\.|\d+\.|🔙 Назад)$"), planning_edit_choice)],
-            PLAN_EDIT_MONTH_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_edit_month)],
-            PLAN_EDIT_TOTAL_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_edit_total)],
-            PLAN_EDIT_CATEGORY_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_edit_category)],
-            PLAN_EDIT_AMOUNT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_edit_amount)],
-            PLAN_EDIT_COMMENT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, custom_category_input)],
-            PLAN_EDIT_DETAILS_STATE: [
-                MessageHandler(filters.Regex("^(✏️ Изменить месяц|✏️ Изменить сумму|✏️ Редактировать категории|✏️ Добавить категорию|✅ Сохранить изменения|❌ Отменить)$"), planning_edit_details),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, planning_edit_details)
-            ],
-            PLAN_EDIT_CATEGORY_CHOICE_STATE: [
-                MessageHandler(filters.Regex("^(✏️ \d+\.|🔙 Назад)$"), planning_edit_category_choice),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, planning_edit_category_choice)
-            ],
             CUSTOM_CATEGORY_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, custom_category_input)],
         },
         fallbacks=[CommandHandler("start", start)],
@@ -3368,6 +2560,29 @@ def main():
 
     application.add_handler(report_conv_handler)
     application.add_handler(correction_conv_handler)
+    
+    # Обработчик для напоминаний (упрощенный)
+    reminder_conv_handler = ConversationHandler(
+        entry_points=[
+            MessageHandler(filters.Regex("^⏰ Напоминания$"), reminder_menu),
+            CommandHandler("reminders", reminder_menu)
+        ],
+        states={
+            REMINDER_MENU_STATE: [
+                MessageHandler(filters.Regex("^(📝 Добавить напоминание|📋 Список напоминаний|🗑️ Удалить напоминание|🔙 Назад)$"), reminder_menu),
+                MessageHandler(filters.Regex("^⏰ Напоминания$"), reminder_menu)
+            ],
+            REMINDER_TITLE_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_title_input)],
+            REMINDER_DESC_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_desc_input)],
+            REMINDER_AMOUNT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_amount_input)],
+            REMINDER_START_DATE_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_start_date_input)],
+            REMINDER_END_DATE_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_end_date_input)],
+            REMINDER_DELETE_STATE: [MessageHandler(filters.Regex("^(❌ Удалить \d+|🔙 Назад)$"), reminder_delete_confirm)],
+        },
+        fallbacks=[CommandHandler("start", start)],
+        allow_reentry=True
+    )
+    
     application.add_handler(reminder_conv_handler)
     application.add_handler(planning_conv_handler)
     application.add_handler(analytics_conv_handler)
@@ -3687,39 +2902,13 @@ async def planning_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             kb.append([KeyboardButton(label)])
         
         # Добавляем кнопки управления
-        kb.append([KeyboardButton("✏️ Редактировать план"), KeyboardButton("🗑️ Удалить план")])
+        kb.append([KeyboardButton("🗑️ Удалить план")])
         kb.append([KeyboardButton("🔙 Назад")])
         
         await update.message.reply_text("\n".join(text_lines), reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
         # Сохраняем планы в контексте для последующего выбора
         context.user_data['plans_list'] = rows
         return PLAN_MENU_STATE
-    
-    elif text == "✏️ Редактировать план":
-        plans = context.user_data.get('plans_list', [])
-        if not plans:
-            await update.message.reply_text(
-                "Список планов не найден. Попробуйте сначала открыть список планов.",
-                reply_markup=get_main_menu_keyboard()
-            )
-            return ConversationHandler.END
-        
-        # Показываем список для выбора
-        plans_text = "✏️ Выберите план для редактирования:\n\n"
-        keyboard = []
-        
-        for i, (pm, total, pid) in enumerate(plans, 1):
-            plans_text += f"{i}. {pm.strftime('%m.%Y')} — {float(total):.0f} Тг\n"
-            keyboard.append([KeyboardButton(f"✏️ {i}. {pm.strftime('%m.%Y')}")])
-        
-        keyboard.append([KeyboardButton("🔙 Назад")])
-        
-        await update.message.reply_text(
-            plans_text,
-            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        )
-        context.user_data['current_state'] = 'plan_edit_choice'
-        return PLAN_EDIT_CHOICE_STATE
     
     elif text == "🗑️ Удалить план":
         return await planning_delete_start(update, context)
@@ -3734,652 +2923,7 @@ async def planning_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         # Нажатие на конкретный месяц из списка — просто повторно вызвать меню
         return PLAN_MENU_STATE
 
-async def reminder_delete_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Подтверждение удаления напоминания"""
-    text = update.message.text
-    
-    if text == "🔙 Назад":
-        await update.message.reply_text(
-            "Выберите действие для напоминаний:",
-            reply_markup=ReplyKeyboardMarkup([
-                ["📝 Добавить напоминание", "📋 Список напоминаний"], 
-                ["🗑️ Удалить напоминание", "🔙 Назад"]
-            ], resize_keyboard=True)
-        )
-        return REMINDER_MENU_STATE
-    
-    # Проверяем формат "❌ Удалить N"
-    if text.startswith("❌ Удалить "):
-        try:
-            index = int(text.split()[-1]) - 1
-            reminders = context.user_data.get('reminders_list', [])
-            
-            if 0 <= index < len(reminders):
-                reminder = reminders[index]
-                rem_id = reminder[0]
-                title = reminder[1]
-                
-                # Удаляем напоминание из БД
-                if delete_reminder(rem_id):
-                    await update.message.reply_text(
-                        f"✅ Напоминание '{title}' успешно удалено!",
-                        reply_markup=get_main_menu_keyboard()
-                    )
-                    return ConversationHandler.END
-                else:
-                    await update.message.reply_text(
-                        "❌ Ошибка при удалении напоминания. Попробуйте снова.",
-                        reply_markup=get_main_menu_keyboard()
-                    )
-                    return ConversationHandler.END
-            else:
-                await update.message.reply_text(
-                    "❌ Неверный номер напоминания. Попробуйте снова.",
-                    reply_markup=get_main_menu_keyboard()
-                )
-                return ConversationHandler.END
-        except (ValueError, IndexError):
-            await update.message.reply_text(
-                "❌ Неверный формат. Попробуйте снова.",
-                reply_markup=get_main_menu_keyboard()
-            )
-            return ConversationHandler.END
-    
-    await update.message.reply_text(
-        "❌ Неверный выбор. Попробуйте снова.",
-        reply_markup=get_main_menu_keyboard()
-    )
-    return ConversationHandler.END
 
-async def planning_edit_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обработка выбора плана для редактирования"""
-    text = update.message.text
-    
-    if text == "🔙 Назад":
-        context.user_data.pop('current_state', None)
-        await update.message.reply_text(
-            "Выберите действие:",
-            reply_markup=ReplyKeyboardMarkup([["➕ Добавить планирование", "📋 Список планов"], ["🗑️ Удалить план", "🔙 Назад"]], resize_keyboard=True)
-        )
-        return PLAN_MENU_STATE
-    
-    # Парсим выбор пользователя
-    if text.startswith("✏️ "):
-        try:
-            choice_text = text[2:].strip()  # Убираем "✏️ "
-            
-            # Проверяем, это дата или номер
-            if "." in choice_text and len(choice_text.split(".")) == 3:
-                # Это дата (например "1.09.2025")
-                try:
-                    day, month, year = choice_text.split(".")
-                    target_date = datetime.strptime(f"{day}.{month}.{year}", "%d.%m.%Y")
-                    
-                    # Ищем план с этой датой
-                    plans = context.user_data.get('plans_list', [])
-                    selected_plan = None
-                    
-                    for plan in plans:
-                        pm, total, pid = plan
-                        if pm.month == target_date.month and pm.year == target_date.year:
-                            selected_plan = plan
-                            break
-                    
-                    if not selected_plan:
-                        await update.message.reply_text(
-                            "❌ План с указанной датой не найден. Попробуйте снова.",
-                            reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
-                        )
-                        return PLAN_EDIT_CHOICE_STATE
-                        
-                except ValueError:
-                    await update.message.reply_text(
-                        "❌ Неверный формат даты. Попробуйте снова.",
-                        reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
-                    )
-                    return PLAN_EDIT_CHOICE_STATE
-            else:
-                # Это выбор по номеру (например "1. Автострахование")
-                choice_num = int(choice_text.split(".")[0]) - 1
-                plans = context.user_data.get('plans_list', [])
-                
-                if 0 <= choice_num < len(plans):
-                    selected_plan = plans[choice_num]
-                else:
-                    await update.message.reply_text(
-                        "❌ Неверный выбор. Попробуйте снова.",
-                        reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
-                    )
-                    return PLAN_EDIT_CHOICE_STATE
-            
-            # Обрабатываем выбранный план
-            context.user_data['editing_plan'] = selected_plan
-            pm, total, pid = selected_plan
-            
-            # Загружаем детали плана
-            conn = get_db_connection()
-            if not conn:
-                await update.message.reply_text(
-                    "❌ Ошибка подключения к базе данных.",
-                    reply_markup=get_main_menu_keyboard()
-                )
-                return ConversationHandler.END
-            
-            try:
-                cursor = conn.cursor()
-                cursor.execute('SELECT category, amount, comment FROM budget_plan_items WHERE plan_id = %s ORDER BY id', (pid,))
-                current_items = cursor.fetchall()
-                
-                context.user_data['current_plan_items'] = current_items
-                context.user_data['editing_items'] = list(current_items)  # Копия для редактирования
-                
-                # Показываем детали плана с кнопками управления
-                plan_details = f"✏️ Редактирование плана:\n\n"
-                plan_details += f"📅 Месяц: {pm.strftime('%m.%Y')}\n"
-                plan_details += f"💰 Общая сумма: {float(total):.2f} Тг\n\n"
-                plan_details += f"📋 Категории:\n"
-                
-                for i, (cat, amt, comm) in enumerate(current_items, 1):
-                    plan_details += f"{i}. {cat}: {float(amt):.2f} Тг\n"
-                
-                keyboard = [
-                    ["✏️ Изменить месяц", "✏️ Изменить сумму"],
-                    ["✏️ Редактировать категории", "✏️ Добавить категорию"],
-                    ["✅ Сохранить изменения", "❌ Отменить"]
-                ]
-                
-                await update.message.reply_text(
-                    plan_details,
-                    reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-                )
-                context.user_data['current_state'] = 'plan_edit_details'
-                return PLAN_EDIT_DETAILS_STATE
-                
-            except Exception as e:
-                logger.error(f"Ошибка при загрузке плана: {e}")
-                await update.message.reply_text(
-                    "❌ Ошибка при загрузке плана.",
-                    reply_markup=get_main_menu_keyboard()
-                )
-                return ConversationHandler.END
-            finally:
-                conn.close()
-                
-        except (ValueError, IndexError):
-            await update.message.reply_text(
-                "❌ Неверный формат. Попробуйте снова.",
-                reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
-            )
-            return PLAN_EDIT_CHOICE_STATE
-    
-    return PLAN_EDIT_CHOICE_STATE
-
-async def planning_edit_month(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Редактирование месяца плана"""
-    text = update.message.text.strip()
-    
-    try:
-        if text and text != context.user_data.get('editing_plan', [None])[0].strftime('%m.%Y'):
-            # Пользователь ввел новый месяц
-            new_month = datetime.strptime(f"01.{text}", "%d.%m.%Y").date()
-        else:
-            # Пользователь оставил текущий месяц
-            selected_plan = context.user_data.get('editing_plan')
-            pm, total, pid = selected_plan
-            new_month = pm
-    except ValueError:
-        await update.message.reply_text(
-            "❌ Неверный формат. Введите месяц в виде ММ.ГГГГ:",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        return PLAN_EDIT_MONTH_STATE
-    
-    context.user_data['new_plan_month'] = new_month
-    
-    # Обновляем план в контексте
-    selected_plan = context.user_data.get('editing_plan')
-    pm, total, pid = selected_plan
-    context.user_data['editing_plan'] = (new_month, total, pid)
-    
-    # Возвращаемся к детальному редактированию
-    editing_items = context.user_data.get('editing_items', [])
-    
-    plan_details = f"✏️ Редактирование плана:\n\n"
-    plan_details += f"📅 Месяц: {new_month.strftime('%m.%Y')}\n"
-    plan_details += f"💰 Общая сумма: {float(total):.2f} Тг\n\n"
-    plan_details += f"📋 Категории:\n"
-    
-    for i, (cat, amt, comm) in enumerate(editing_items, 1):
-        plan_details += f"{i}. {cat}: {float(amt):.2f} Тг\n"
-    
-    keyboard = [
-        ["✏️ Изменить месяц", "✏️ Изменить сумму"],
-        ["✏️ Редактировать категории", "✏️ Добавить категорию"],
-        ["✅ Сохранить изменения", "❌ Отменить"]
-    ]
-    
-    await update.message.reply_text(
-        f"✅ Месяц обновлен: {new_month.strftime('%m.%Y')}\n\n" + plan_details,
-        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    )
-    return PLAN_EDIT_DETAILS_STATE
-
-async def planning_edit_total(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Редактирование общей суммы плана"""
-    text = update.message.text.strip()
-    
-    try:
-        if text:
-            new_total = float(text.replace(',', '.'))
-            if new_total <= 0:
-                raise ValueError
-        else:
-            # Пользователь оставил текущую сумму
-            selected_plan = context.user_data.get('editing_plan')
-            pm, total, pid = selected_plan
-            new_total = float(total)
-    except ValueError:
-        await update.message.reply_text(
-            "❌ Введите положительное число для общего бюджета:",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        return PLAN_EDIT_TOTAL_STATE
-    
-    context.user_data['new_plan_total'] = new_total
-    
-    # Обновляем план в контексте
-    selected_plan = context.user_data.get('editing_plan')
-    pm, total, pid = selected_plan
-    context.user_data['editing_plan'] = (pm, new_total, pid)
-    
-    # Возвращаемся к детальному редактированию
-    editing_items = context.user_data.get('editing_items', [])
-    
-    plan_details = f"✏️ Редактирование плана:\n\n"
-    plan_details += f"📅 Месяц: {pm.strftime('%m.%Y')}\n"
-    plan_details += f"💰 Общая сумма: {new_total:.2f} Тг\n\n"
-    plan_details += f"📋 Категории:\n"
-    
-    for i, (cat, amt, comm) in enumerate(editing_items, 1):
-        plan_details += f"{i}. {cat}: {float(amt):.2f} Тг\n"
-    
-    keyboard = [
-        ["✏️ Изменить месяц", "✏️ Изменить сумму"],
-        ["✏️ Редактировать категории", "✏️ Добавить категорию"],
-        ["✅ Сохранить изменения", "❌ Отменить"]
-    ]
-    
-    await update.message.reply_text(
-        f"✅ Сумма обновлена: {new_total:.2f} Тг\n\n" + plan_details,
-        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    )
-    return PLAN_EDIT_DETAILS_STATE
-
-async def planning_edit_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Редактирование категории плана"""
-    category = update.message.text.strip()
-    
-    if category == 'Готово':
-        # Возвращаемся к детальному редактированию
-        selected_plan = context.user_data.get('editing_plan')
-        pm, total, pid = selected_plan
-        editing_items = context.user_data.get('editing_items', [])
-        
-        plan_details = f"✏️ Редактирование плана:\n\n"
-        plan_details += f"📅 Месяц: {pm.strftime('%m.%Y')}\n"
-        plan_details += f"💰 Общая сумма: {float(total):.2f} Тг\n\n"
-        plan_details += f"📋 Категории:\n"
-        
-        for i, (cat, amt, comm) in enumerate(editing_items, 1):
-            plan_details += f"{i}. {cat}: {float(amt):.2f} Тг\n"
-        
-        keyboard = [
-            ["✏️ Изменить месяц", "✏️ Изменить сумму"],
-            ["✏️ Редактировать категории", "✏️ Добавить категорию"],
-            ["✅ Сохранить изменения", "❌ Отменить"]
-        ]
-        
-        await update.message.reply_text(
-            plan_details,
-            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        )
-        context.user_data['current_state'] = 'plan_edit_details'
-        return PLAN_EDIT_DETAILS_STATE
-    
-    # Проверяем специальную кнопку для создания новой категории
-    if category == "➕ Добавить новую категорию":
-        await update.message.reply_text(
-            "Введите название новой категории для планирования бюджета:",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        return PLAN_EDIT_COMMENT_STATE
-    
-    if category not in CATEGORIES:
-        await update.message.reply_text(
-            "Выберите категорию с клавиатуры, нажмите '➕ Добавить новую категорию' или отправьте 'Готово' для завершения.",
-            reply_markup=get_categories_keyboard_with_done()
-        )
-        return PLAN_EDIT_CATEGORY_STATE
-    
-    context.user_data['editing_category'] = category
-    
-    # Проверяем, есть ли уже эта категория в плане
-    editing_items = context.user_data.get('editing_items', [])
-    existing_amount = 0
-    for i, (cat, amt, comm) in enumerate(editing_items):
-        if cat == category:
-            existing_amount = float(amt)
-            break
-    
-    if existing_amount > 0:
-        await update.message.reply_text(
-            f"Категория '{category}' уже есть в плане с суммой {existing_amount:.2f} Тг.\n"
-            f"Введите новую сумму для этой категории:",
-            reply_markup=ReplyKeyboardRemove()
-        )
-    else:
-        await update.message.reply_text(
-            f"Введите сумму для категории '{category}':",
-            reply_markup=ReplyKeyboardRemove()
-        )
-    
-    return PLAN_EDIT_AMOUNT_STATE
-
-async def planning_edit_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Редактирование суммы категории плана"""
-    try:
-        amount = float(update.message.text.replace(',', '.'))
-        if amount < 0:
-            raise ValueError
-    except ValueError:
-        await update.message.reply_text(
-            "❌ Введите корректную сумму:",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        return PLAN_EDIT_AMOUNT_STATE
-    
-    category = context.user_data.get('editing_category')
-    editing_items = context.user_data.get('editing_items', [])
-    
-    # Обновляем или добавляем категорию
-    updated = False
-    for i, (cat, amt, comm) in enumerate(editing_items):
-        if cat == category:
-            editing_items[i] = (cat, amount, comm)
-            updated = True
-            break
-    
-    if not updated:
-        editing_items.append((category, amount, None))
-    
-    context.user_data['editing_items'] = editing_items
-    
-    # Проверяем, редактируем ли мы существующую категорию или добавляем новую
-    if 'editing_category_index' in context.user_data:
-        # Редактируем существующую категорию
-        editing_items[context.user_data['editing_category_index']] = (category, amount, comm)
-        context.user_data.pop('editing_category_index', None)
-        context.user_data.pop('editing_category_item', None)
-        
-        # Возвращаемся к детальному редактированию
-        selected_plan = context.user_data.get('editing_plan')
-        pm, total, pid = selected_plan
-        
-        plan_details = f"✏️ Редактирование плана:\n\n"
-        plan_details += f"📅 Месяц: {pm.strftime('%m.%Y')}\n"
-        plan_details += f"💰 Общая сумма: {float(total):.2f} Тг\n\n"
-        plan_details += f"📋 Категории:\n"
-        
-        for i, (cat, amt, comm) in enumerate(editing_items, 1):
-            plan_details += f"{i}. {cat}: {float(amt):.2f} Тг\n"
-        
-        keyboard = [
-            ["✏️ Изменить месяц", "✏️ Изменить сумму"],
-            ["✏️ Редактировать категории", "✏️ Добавить категорию"],
-            ["✅ Сохранить изменения", "❌ Отменить"]
-        ]
-        
-        await update.message.reply_text(
-            f"✅ {category}: {amount:.2f} Тг\n\n" + plan_details,
-            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        )
-        return PLAN_EDIT_DETAILS_STATE
-    else:
-        # Добавляем новую категорию
-        await update.message.reply_text(
-            f"✅ {category}: {amount:.2f} Тг\n\n"
-            f"Выберите следующую категорию или 'Готово' для завершения:",
-            reply_markup=get_categories_keyboard_with_done()
-        )
-        return PLAN_EDIT_CATEGORY_STATE
-
-async def planning_edit_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Сохранение отредактированного плана"""
-    selected_plan = context.user_data.get('editing_plan')
-    pm, total, pid = selected_plan
-    
-    new_month = context.user_data.get('new_plan_month', pm)
-    new_total = context.user_data.get('new_plan_total', float(total))
-    editing_items = context.user_data.get('editing_items', [])
-    
-    # Сохраняем изменения в базу данных
-    conn = get_db_connection()
-    if not conn:
-        await update.message.reply_text(
-            "❌ Ошибка подключения к базе данных.",
-            reply_markup=get_main_menu_keyboard()
-        )
-        return ConversationHandler.END
-    
-    try:
-        cursor = conn.cursor()
-        
-        # Обновляем основной план
-        cursor.execute('''
-            UPDATE budget_plans 
-            SET plan_month = %s, total_amount = %s 
-            WHERE id = %s
-        ''', (new_month, new_total, pid))
-        
-        # Удаляем старые элементы плана
-        cursor.execute('DELETE FROM budget_plan_items WHERE plan_id = %s', (pid,))
-        
-        # Добавляем новые элементы плана
-        for category, amount, comment in editing_items:
-            cursor.execute('''
-                INSERT INTO budget_plan_items (plan_id, category, amount, comment)
-                VALUES (%s, %s, %s, %s)
-            ''', (pid, category, amount, comment))
-        
-        conn.commit()
-        
-        # Формируем итоговое сообщение
-        items_text = "\n".join([f"• {cat}: {float(amt):.2f} Тг" for cat, amt, comm in editing_items])
-        
-        await update.message.reply_text(
-            f"✅ План успешно обновлен!\n\n"
-            f"📅 Месяц: {new_month.strftime('%m.%Y')}\n"
-            f"💰 Общая сумма: {new_total:.2f} Тг\n\n"
-            f"📋 Категории:\n{items_text}",
-            reply_markup=get_main_menu_keyboard()
-        )
-        
-    except Exception as e:
-        logger.error(f"Ошибка при сохранении плана: {e}")
-        await update.message.reply_text(
-            "❌ Ошибка при сохранении плана. Попробуйте снова.",
-            reply_markup=get_main_menu_keyboard()
-        )
-    finally:
-        conn.close()
-    
-    # Очищаем контекст
-    context.user_data.pop('editing_plan', None)
-    context.user_data.pop('new_plan_month', None)
-    context.user_data.pop('new_plan_total', None)
-    context.user_data.pop('editing_items', None)
-    context.user_data.pop('editing_category', None)
-    context.user_data.pop('current_plan_items', None)
-    context.user_data.pop('current_state', None)
-    
-    return ConversationHandler.END
-
-async def planning_edit_details(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обработка детального редактирования плана"""
-    text = update.message.text
-    
-    if text == "✏️ Изменить месяц":
-        selected_plan = context.user_data.get('editing_plan')
-        pm, total, pid = selected_plan
-        
-        await update.message.reply_text(
-            f"📅 Текущий месяц: {pm.strftime('%m.%Y')}\n\n"
-            f"Введите новый месяц в формате ММ.ГГГГ:",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        context.user_data['current_state'] = 'plan_edit_month'
-        return PLAN_EDIT_MONTH_STATE
-    
-    elif text == "✏️ Изменить сумму":
-        selected_plan = context.user_data.get('editing_plan')
-        pm, total, pid = selected_plan
-        
-        await update.message.reply_text(
-            f"💰 Текущая сумма: {float(total):.2f} Тг\n\n"
-            f"Введите новую общую сумму бюджета:",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        context.user_data['current_state'] = 'plan_edit_total'
-        return PLAN_EDIT_TOTAL_STATE
-    
-    elif text == "✏️ Редактировать категории":
-        editing_items = context.user_data.get('editing_items', [])
-        
-        if not editing_items:
-            await update.message.reply_text(
-                "❌ В плане нет категорий для редактирования.",
-                reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
-            )
-            return PLAN_EDIT_DETAILS_STATE
-        
-        # Показываем список категорий для редактирования
-        categories_text = "✏️ Выберите категорию для редактирования:\n\n"
-        keyboard = []
-        
-        for i, (cat, amt, comm) in enumerate(editing_items, 1):
-            categories_text += f"{i}. {cat}: {float(amt):.2f} Тг\n"
-            keyboard.append([KeyboardButton(f"✏️ {i}. {cat}")])
-        
-        keyboard.append([KeyboardButton("🔙 Назад")])
-        
-        await update.message.reply_text(
-            categories_text,
-            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        )
-        context.user_data['current_state'] = 'plan_edit_category_choice'
-        return PLAN_EDIT_CATEGORY_CHOICE_STATE
-    
-    elif text == "✏️ Добавить категорию":
-        await update.message.reply_text(
-            "Выберите категорию для добавления:",
-            reply_markup=get_categories_keyboard_with_done()
-        )
-        context.user_data['current_state'] = 'plan_edit_category'
-        return PLAN_EDIT_CATEGORY_STATE
-    
-    elif text == "✅ Сохранить изменения":
-        return await planning_edit_save(update, context)
-    
-    elif text == "❌ Отменить":
-        context.user_data.pop('editing_plan', None)
-        context.user_data.pop('current_plan_items', None)
-        context.user_data.pop('editing_items', None)
-        context.user_data.pop('current_state', None)
-        context.user_data.pop('editing_category_index', None)
-        context.user_data.pop('editing_category_item', None)
-        
-        await update.message.reply_text(
-            "❌ Редактирование отменено.",
-            reply_markup=get_main_menu_keyboard()
-        )
-        return ConversationHandler.END
-    
-    return PLAN_EDIT_DETAILS_STATE
-
-async def planning_edit_category_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Выбор категории для редактирования"""
-    text = update.message.text
-    
-    if text == "🔙 Назад":
-        # Возвращаемся к детальному редактированию
-        selected_plan = context.user_data.get('editing_plan')
-        pm, total, pid = selected_plan
-        editing_items = context.user_data.get('editing_items', [])
-        
-        plan_details = f"✏️ Редактирование плана:\n\n"
-        plan_details += f"📅 Месяц: {pm.strftime('%m.%Y')}\n"
-        plan_details += f"💰 Общая сумма: {float(total):.2f} Тг\n\n"
-        plan_details += f"📋 Категории:\n"
-        
-        for i, (cat, amt, comm) in enumerate(editing_items, 1):
-            plan_details += f"{i}. {cat}: {float(amt):.2f} Тг\n"
-        
-        keyboard = [
-            ["✏️ Изменить месяц", "✏️ Изменить сумму"],
-            ["✏️ Редактировать категории", "✏️ Добавить категорию"],
-            ["✅ Сохранить изменения", "❌ Отменить"]
-        ]
-        
-        await update.message.reply_text(
-            plan_details,
-            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        )
-        context.user_data['current_state'] = 'plan_edit_details'
-        return PLAN_EDIT_DETAILS_STATE
-    
-    # Парсим выбор категории
-    if text.startswith("✏️ "):
-        try:
-            # Извлекаем номер из текста "✏️ 5. Авто"
-            choice_text = text[2:].strip()  # Убираем "✏️ "
-            if "." in choice_text:
-                choice_num = int(choice_text.split(".")[0]) - 1
-            else:
-                choice_num = int(choice_text) - 1
-                
-            editing_items = context.user_data.get('editing_items', [])
-            
-            if 0 <= choice_num < len(editing_items):
-                selected_category = editing_items[choice_num]
-                context.user_data['editing_category_item'] = selected_category
-                context.user_data['editing_category_index'] = choice_num
-                
-                cat, amt, comm = selected_category
-                
-                await update.message.reply_text(
-                    f"✏️ Редактирование категории:\n\n"
-                    f"📝 Категория: {cat}\n"
-                    f"💰 Сумма: {float(amt):.2f} Тг\n"
-                    f"📄 Комментарий: {comm or 'Не указан'}\n\n"
-                    f"Введите новую сумму для этой категории:",
-                    reply_markup=ReplyKeyboardRemove()
-                )
-                context.user_data['current_state'] = 'plan_edit_amount'
-                return PLAN_EDIT_AMOUNT_STATE
-            else:
-                await update.message.reply_text(
-                    "❌ Неверный выбор. Попробуйте снова.",
-                    reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
-                )
-                return PLAN_EDIT_CATEGORY_CHOICE_STATE
-        except (ValueError, IndexError):
-            await update.message.reply_text(
-                "❌ Неверный формат. Попробуйте снова.",
-                reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
-            )
-            return PLAN_EDIT_CATEGORY_CHOICE_STATE
-    
-    return PLAN_EDIT_CATEGORY_CHOICE_STATE
 
 async def planning_delete_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Начало удаления плана бюджета"""
@@ -4596,11 +3140,22 @@ async def show_detailed_plan(update: Update, context: ContextTypes.DEFAULT_TYPE,
             conn.close()
         
         if not items:
+            # Создаем клавиатуру с кнопками управления статьями бюджета
+            keyboard = [
+                ["➕ Добавить статью бюджета"],
+                ["🔙 Назад"]
+            ]
+            
+            # Сохраняем информацию о плане в контексте для последующего использования
+            context.user_data['current_plan_id'] = plan_id
+            context.user_data['current_plan_month'] = month_part
+            context.user_data['current_plan_items'] = []
+            
             await update.message.reply_text(
                 f"📋 План на {month_part}\n"
                 f"💰 Общий бюджет: {float(total_amount):.0f} Тг\n"
                 f"📝 Статьи бюджета не добавлены.",
-                reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+                reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
             )
             return PLAN_MENU_STATE
         
@@ -4664,11 +3219,22 @@ async def show_detailed_plan(update: Update, context: ContextTypes.DEFAULT_TYPE,
                 detail_text += f" ({comm})"
             detail_text += "\n"
         
+        # Создаем клавиатуру с кнопками управления статьями бюджета
+        keyboard = [
+            ["🗑️ Удалить статью бюджета", "➕ Добавить статью бюджета"],
+            ["🔙 Назад"]
+        ]
+        
+        # Сохраняем информацию о плане в контексте для последующего использования
+        context.user_data['current_plan_id'] = plan_id
+        context.user_data['current_plan_month'] = month_part
+        context.user_data['current_plan_items'] = items
+        
         # Отправляем график с детальной информацией
         await update.message.reply_photo(
             photo=buf,
             caption=detail_text,
-            reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         )
         
         return PLAN_MENU_STATE
@@ -4680,6 +3246,626 @@ async def show_detailed_plan(update: Update, context: ContextTypes.DEFAULT_TYPE,
             reply_markup=get_main_menu_keyboard()
         )
         return ConversationHandler.END
+
+# --- Функции для работы с напоминаниями (упрощенные) ---
+def add_payment_reminder(title, description, amount, start_date, end_date):
+    """Добавить новое напоминание о платеже"""
+    conn = get_db_connection()
+    if not conn:
+        return False
+    try:
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO payment_reminders (title, description, amount, start_date, end_date)
+            VALUES (%s, %s, %s, %s, %s)
+        ''', (title, description, amount, start_date, end_date))
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка при добавлении напоминания: {e}")
+        return False
+    finally:
+        conn.close()
+
+def get_all_active_reminders():
+    """Получить все активные напоминания"""
+    conn = get_db_connection()
+    if not conn:
+        return []
+    try:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT id, title, description, amount, start_date, end_date, 
+                   reminder_10_days, reminder_3_days, created_at
+            FROM payment_reminders 
+            WHERE is_active = TRUE 
+            ORDER BY end_date ASC
+        ''')
+        return cursor.fetchall()
+    except Exception as e:
+        logger.error(f"Ошибка при получении напоминаний: {e}")
+        return []
+    finally:
+        conn.close()
+
+def delete_reminder(reminder_id):
+    """Удалить напоминание"""
+    conn = get_db_connection()
+    if not conn:
+        return False
+    try:
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM payment_reminders WHERE id = %s', (reminder_id,))
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка при удалении напоминания: {e}")
+        return False
+    finally:
+        conn.close()
+
+async def reminder_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Главное меню напоминаний (упрощенное)"""
+    user_id = update.effective_user.id
+    
+    # Проверяем защиту блока напоминаний
+    if not validate_block_access("reminders", user_id):
+        await update.message.reply_text(
+            "❌ Доступ к напоминаниям ограничен.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+    
+    text = update.message.text
+    
+    # Если это первое нажатие на кнопку "⏰ Напоминания"
+    if text == "⏰ Напоминания":
+        await update.message.reply_text(
+            "Выберите действие для напоминаний:",
+            reply_markup=ReplyKeyboardMarkup([
+                ["📝 Добавить напоминание", "📋 Список напоминаний"], 
+                ["🗑️ Удалить напоминание", "🔙 Назад"]
+            ], resize_keyboard=True)
+        )
+        context.user_data['current_state'] = 'reminder_menu'
+        return REMINDER_MENU_STATE
+    
+    # Обработка выбора в меню напоминаний
+    elif text == "📝 Добавить напоминание":
+        await update.message.reply_text(
+            "Введите название напоминания:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return REMINDER_TITLE_STATE
+    
+    elif text == "📋 Список напоминаний":
+        reminders = get_all_active_reminders()
+        if not reminders:
+            await update.message.reply_text(
+                "У вас нет активных напоминаний.",
+                reply_markup=get_main_menu_keyboard()
+            )
+            return ConversationHandler.END
+        
+        reminders_text = "📋 Ваши активные напоминания:\n\n"
+        total_amount = 0
+        
+        for i, (rem_id, title, desc, amount, start_date, end_date, sent_10, sent_3, created) in enumerate(reminders, 1):
+            days_left = (end_date - datetime.now().date()).days
+            status = "🟢 Активно" if days_left > 0 else "🔴 Истекло"
+            
+            reminders_text += f"{i}. {title}\n"
+            if desc:
+                reminders_text += f"   📝 {desc}\n"
+            reminders_text += f"   💰 {amount:.2f} Тг\n"
+            reminders_text += f"   📅 {start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')}\n"
+            reminders_text += f"   {status} (осталось {days_left} дней)\n\n"
+            
+            total_amount += amount
+        
+        reminders_text += f"💰 Общая сумма к оплате: {total_amount:.2f} Тг"
+        
+        # Добавляем кнопки управления (только удаление)
+        keyboard = [
+            ["🗑️ Удалить напоминание"],
+            ["🔙 Назад"]
+        ]
+        
+        await update.message.reply_text(
+            reminders_text,
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+        
+        # Сохраняем список напоминаний в контексте для последующего выбора
+        context.user_data['reminders_list'] = reminders
+        return REMINDER_MENU_STATE
+    
+    elif text == "🗑️ Удалить напоминание":
+        reminders = get_all_active_reminders()
+        if not reminders:
+            await update.message.reply_text(
+                "У вас нет активных напоминаний для удаления.",
+                reply_markup=get_main_menu_keyboard()
+            )
+            return ConversationHandler.END
+        
+        reminders_text = "🗑️ Выберите напоминание для удаления:\n\n"
+        keyboard = []
+        
+        for i, (rem_id, title, desc, amount, start_date, end_date, sent_10, sent_3, created) in enumerate(reminders, 1):
+            days_left = (end_date - datetime.now().date()).days
+            reminders_text += f"{i}. {title} - {amount:.2f} Тг (осталось {days_left} дней)\n"
+            keyboard.append([KeyboardButton(f"❌ Удалить {i}")])
+        
+        keyboard.append([KeyboardButton("🔙 Назад")])
+        
+        await update.message.reply_text(
+            reminders_text,
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+        context.user_data['reminders_list'] = reminders
+        return REMINDER_DELETE_STATE
+    
+    elif text == "🔙 Назад":
+        await update.message.reply_text(
+            "Возвращаюсь в главное меню:",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+    
+    return REMINDER_MENU_STATE
+
+async def reminder_title_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка ввода названия напоминания"""
+    title = update.message.text.strip()
+    if not title:
+        await update.message.reply_text(
+            "Название не может быть пустым. Попробуйте снова:",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+    
+    context.user_data['reminder_title'] = title
+    
+    await update.message.reply_text(
+        f"Название: {title}\n\n"
+        "Теперь введите описание (или отправьте '-' если описание не нужно):",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return REMINDER_DESC_STATE
+
+async def reminder_desc_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка ввода описания напоминания"""
+    desc = update.message.text.strip()
+    if desc == '-':
+        desc = None
+    
+    context.user_data['reminder_desc'] = desc
+    
+    await update.message.reply_text(
+        f"Название: {context.user_data['reminder_title']}\n"
+        f"Описание: {desc or 'Не указано'}\n\n"
+        "Теперь введите сумму (например: 25000):",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return REMINDER_AMOUNT_STATE
+
+async def reminder_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка ввода суммы напоминания"""
+    try:
+        amount = float(update.message.text.replace(',', '.'))
+        if amount <= 0:
+            raise ValueError("Сумма должна быть положительной")
+    except ValueError:
+        await update.message.reply_text(
+            "Неверный формат суммы. Введите число больше 0:",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+    
+    context.user_data['reminder_amount'] = amount
+    
+    await update.message.reply_text(
+        f"Название: {context.user_data['reminder_title']}\n"
+        f"Описание: {context.user_data['reminder_desc'] or 'Не указано'}\n"
+        f"Сумма: {amount:.2f} Тг\n\n"
+        "Теперь введите дату начала в формате ДД.ММ.ГГГГ (например: 20.08.2025):",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return REMINDER_START_DATE_STATE
+
+async def reminder_start_date_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка ввода даты начала"""
+    try:
+        start_date = datetime.strptime(update.message.text, '%d.%m.%Y').date()
+    except ValueError:
+        await update.message.reply_text(
+            "Неверный формат даты. Используйте формат ДД.ММ.ГГГГ:",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+    
+    context.user_data['reminder_start_date'] = start_date
+    
+    await update.message.reply_text(
+        f"Название: {context.user_data['reminder_title']}\n"
+        f"Описание: {context.user_data['reminder_desc'] or 'Не указано'}\n"
+        f"Сумма: {context.user_data['reminder_amount']:.2f} Тг\n"
+        f"Дата начала: {start_date.strftime('%d.%m.%Y')}\n\n"
+        "Теперь введите дату окончания в формате ДД.ММ.ГГГГ (например: 19.08.2026):",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return REMINDER_END_DATE_STATE
+
+async def reminder_end_date_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка ввода даты окончания"""
+    try:
+        end_date = datetime.strptime(update.message.text, '%d.%m.%Y').date()
+        start_date = context.user_data['reminder_start_date']
+        
+        if end_date <= start_date:
+            await update.message.reply_text(
+                "Дата окончания должна быть позже даты начала. Попробуйте снова:",
+                reply_markup=get_main_menu_keyboard()
+            )
+            return ConversationHandler.END
+            
+    except ValueError:
+        await update.message.reply_text(
+            "Неверный формат даты. Используйте формат ДД.ММ.ГГГГ:",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+    
+    # Сохраняем напоминание в базу данных
+    title = context.user_data['reminder_title']
+    desc = context.user_data['reminder_desc']
+    amount = context.user_data['reminder_amount']
+    start_date = context.user_data['reminder_start_date']
+    
+    if add_payment_reminder(title, desc, amount, start_date, end_date):
+        days_left = (end_date - datetime.now().date()).days
+        
+        await update.message.reply_text(
+            f"✅ Напоминание успешно добавлено!\n\n"
+            f"📋 {title}\n"
+            f"📝 {desc or 'Описание не указано'}\n"
+            f"💰 {amount:.2f} Тг\n"
+            f"📅 {start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')}\n"
+            f"⏰ Осталось дней: {days_left}\n\n"
+            f"Бот будет напоминать о необходимости оплаты за 10 и 3 дня до истечения срока.",
+            reply_markup=get_main_menu_keyboard()
+        )
+    else:
+        await update.message.reply_text(
+            "❌ Ошибка при сохранении напоминания. Попробуйте снова.",
+            reply_markup=get_main_menu_keyboard()
+        )
+    
+    # Очищаем данные
+    context.user_data.clear()
+    return ConversationHandler.END
+
+async def reminder_delete_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Подтверждение удаления напоминания"""
+    text = update.message.text
+    
+    if text == "🔙 Назад":
+        await update.message.reply_text(
+            "Выберите действие для напоминаний:",
+            reply_markup=ReplyKeyboardMarkup([
+                ["📝 Добавить напоминание", "📋 Список напоминаний"], 
+                ["🗑️ Удалить напоминание", "🔙 Назад"]
+            ], resize_keyboard=True)
+        )
+        return REMINDER_MENU_STATE
+    
+    # Проверяем формат "❌ Удалить N"
+    if text.startswith("❌ Удалить "):
+        try:
+            index = int(text.split()[-1]) - 1
+            reminders = context.user_data.get('reminders_list', [])
+            
+            if 0 <= index < len(reminders):
+                reminder = reminders[index]
+                rem_id = reminder[0]
+                title = reminder[1]
+                
+                # Удаляем напоминание из БД
+                if delete_reminder(rem_id):
+                    await update.message.reply_text(
+                        f"✅ Напоминание '{title}' успешно удалено!",
+                        reply_markup=get_main_menu_keyboard()
+                    )
+                    return ConversationHandler.END
+                else:
+                    await update.message.reply_text(
+                        "❌ Ошибка при удалении напоминания. Попробуйте снова.",
+                        reply_markup=get_main_menu_keyboard()
+                    )
+                    return ConversationHandler.END
+            else:
+                await update.message.reply_text(
+                    "❌ Неверный номер напоминания. Попробуйте снова.",
+                    reply_markup=get_main_menu_keyboard()
+                )
+                return ConversationHandler.END
+        except (ValueError, IndexError):
+            await update.message.reply_text(
+                "❌ Неверный формат. Попробуйте снова.",
+                reply_markup=get_main_menu_keyboard()
+            )
+            return ConversationHandler.END
+    
+    await update.message.reply_text(
+        "❌ Неверный выбор. Попробуйте снова.",
+        reply_markup=get_main_menu_keyboard()
+    )
+    return ConversationHandler.END
+
+async def budget_item_delete_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Меню удаления статьи бюджета"""
+    plan_id = context.user_data.get('current_plan_id')
+    plan_month = context.user_data.get('current_plan_month')
+    items = context.user_data.get('current_plan_items', [])
+    
+    if not plan_id or not items:
+        await update.message.reply_text(
+            "❌ Информация о плане не найдена. Вернитесь к списку планов.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+    
+    if not items:
+        await update.message.reply_text(
+            f"📋 В плане на {plan_month} нет статей для удаления.",
+            reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+        )
+        return PLAN_MENU_STATE
+    
+    # Показываем список статей для удаления
+    items_text = f"🗑️ Выберите статью бюджета для удаления:\n\n"
+    keyboard = []
+    
+    for i, (cat, amt, comm) in enumerate(items, 1):
+        items_text += f"{i}. {cat}: {float(amt):.0f} Тг"
+        if comm:
+            items_text += f" ({comm})"
+        items_text += "\n"
+        keyboard.append([KeyboardButton(f"🗑️ Удалить {i}")])
+    
+    keyboard.append([KeyboardButton("🔙 Назад")])
+    
+    await update.message.reply_text(
+        items_text,
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    )
+    
+    context.user_data['current_state'] = 'budget_item_delete_choice'
+    return PLAN_MENU_STATE
+
+async def budget_item_add_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Меню добавления статьи бюджета"""
+    plan_id = context.user_data.get('current_plan_id')
+    plan_month = context.user_data.get('current_plan_month')
+    
+    if not plan_id:
+        await update.message.reply_text(
+            "❌ Информация о плане не найдена. Вернитесь к списку планов.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+    
+    await update.message.reply_text(
+        f"➕ Добавление статьи бюджета для плана на {plan_month}\n\n"
+        f"Выберите категорию:",
+        reply_markup=get_categories_keyboard_with_done()
+    )
+    
+    context.user_data['current_state'] = 'budget_item_add_category'
+    return PLAN_MENU_STATE
+
+async def budget_item_delete_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Подтверждение удаления статьи бюджета"""
+    text = update.message.text
+    
+    if text == "🔙 Назад":
+        return await budget_item_delete_menu(update, context)
+    
+    if text.startswith("🗑️ Удалить "):
+        try:
+            item_num = int(text.split()[-1]) - 1
+            items = context.user_data.get('current_plan_items', [])
+            
+            if 0 <= item_num < len(items):
+                selected_item = items[item_num]
+                cat, amt, comm = selected_item
+                
+                # Удаляем статью из базы данных
+                conn = get_db_connection()
+                if not conn:
+                    await update.message.reply_text(
+                        "❌ Ошибка подключения к базе данных.",
+                        reply_markup=get_main_menu_keyboard()
+                    )
+                    return ConversationHandler.END
+                
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        DELETE FROM budget_plan_items 
+                        WHERE plan_id = %s AND category = %s AND amount = %s
+                    ''', (context.user_data['current_plan_id'], cat, amt))
+                    conn.commit()
+                    
+                    await update.message.reply_text(
+                        f"✅ Статья '{cat}' успешно удалена из плана!",
+                        reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+                    )
+                    
+                    # Обновляем список статей в контексте
+                    items.pop(item_num)
+                    context.user_data['current_plan_items'] = items
+                    
+                except Exception as e:
+                    logger.error(f"Ошибка при удалении статьи бюджета: {e}")
+                    await update.message.reply_text(
+                        "❌ Ошибка при удалении статьи. Попробуйте снова.",
+                        reply_markup=get_main_menu_keyboard()
+                    )
+                finally:
+                    conn.close()
+            else:
+                await update.message.reply_text(
+                    "❌ Неверный номер статьи. Попробуйте снова.",
+                    reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+                )
+        except (ValueError, IndexError):
+            await update.message.reply_text(
+                "❌ Неверный формат. Попробуйте снова.",
+                reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+            )
+    
+    return PLAN_MENU_STATE
+
+async def budget_item_add_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка выбора категории для добавления статьи бюджета"""
+    text = update.message.text.strip()
+    
+    if text == "✅ Готово":
+        await update.message.reply_text(
+            "❌ Добавление статьи отменено.",
+            reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+        )
+        return PLAN_MENU_STATE
+    
+    if text == "➕ Добавить новую категорию":
+        await update.message.reply_text(
+            "Введите название новой категории для планирования бюджета:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        context.user_data['current_state'] = 'budget_item_add_new_category'
+        return PLAN_MENU_STATE
+    
+    if text not in CATEGORIES:
+        await update.message.reply_text(
+            "Выберите категорию с клавиатуры, нажмите '➕ Добавить новую категорию' или отправьте 'Готово' для завершения.",
+            reply_markup=get_categories_keyboard_with_done()
+        )
+        return PLAN_MENU_STATE
+    
+    # Проверяем, есть ли уже эта категория в плане
+    items = context.user_data.get('current_plan_items', [])
+    existing_amount = 0
+    for cat, amt, comm in items:
+        if cat == text:
+            existing_amount = float(amt)
+            break
+    
+    if existing_amount > 0:
+        await update.message.reply_text(
+            f"Категория '{text}' уже есть в плане с суммой {existing_amount:.2f} Тг.\n"
+            f"Введите новую сумму для этой категории:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+    else:
+        await update.message.reply_text(
+            f"Введите сумму для категории '{text}':",
+            reply_markup=ReplyKeyboardRemove()
+        )
+    
+    context.user_data['selected_category'] = text
+    context.user_data['current_state'] = 'budget_item_add_amount'
+    return PLAN_MENU_STATE
+
+async def budget_item_add_new_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка ввода новой категории для статьи бюджета"""
+    category = update.message.text.strip()
+    
+    if not category:
+        await update.message.reply_text(
+            "Название категории не может быть пустым. Введите название:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return PLAN_MENU_STATE
+    
+    # Проверяем, есть ли уже эта категория в плане
+    items = context.user_data.get('current_plan_items', [])
+    existing_amount = 0
+    for cat, amt, comm in items:
+        if cat == category:
+            existing_amount = float(amt)
+            break
+    
+    if existing_amount > 0:
+        await update.message.reply_text(
+            f"Категория '{category}' уже есть в плане с суммой {existing_amount:.2f} Тг.\n"
+            f"Введите новую сумму для этой категории:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+    else:
+        await update.message.reply_text(
+            f"Введите сумму для категории '{category}':",
+            reply_markup=ReplyKeyboardRemove()
+        )
+    
+    context.user_data['selected_category'] = category
+    context.user_data['current_state'] = 'budget_item_add_amount'
+    return PLAN_MENU_STATE
+
+async def budget_item_add_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка ввода суммы для статьи бюджета"""
+    try:
+        amount = float(update.message.text.replace(',', '.'))
+        if amount < 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Введите корректную сумму:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return PLAN_MENU_STATE
+    
+    category = context.user_data.get('selected_category')
+    plan_id = context.user_data.get('current_plan_id')
+    
+    # Добавляем статью в базу данных
+    conn = get_db_connection()
+    if not conn:
+        await update.message.reply_text(
+            "❌ Ошибка подключения к базе данных.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+    
+    try:
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO budget_plan_items (plan_id, category, amount, comment)
+            VALUES (%s, %s, %s, %s)
+        ''', (plan_id, category, amount, None))
+        conn.commit()
+        
+        await update.message.reply_text(
+            f"✅ Статья '{category}' на сумму {amount:.0f} Тг успешно добавлена!",
+            reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+        )
+        
+        # Обновляем список статей в контексте
+        items = context.user_data.get('current_plan_items', [])
+        items.append((category, amount, None))
+        context.user_data['current_plan_items'] = items
+        
+    except Exception as e:
+        logger.error(f"Ошибка при добавлении статьи бюджета: {e}")
+        await update.message.reply_text(
+            "❌ Ошибка при добавлении статьи. Попробуйте снова.",
+            reply_markup=get_main_menu_keyboard()
+        )
+    finally:
+        conn.close()
+    
+    return PLAN_MENU_STATE
 
 async def expense_delete_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Выбор расхода для удаления"""
