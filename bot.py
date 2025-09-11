@@ -1636,7 +1636,7 @@ async def manual_training(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
 
 
-async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     period_text = update.message.text.lower()
     start_date, end_date = parse_date_period(period_text)
     if not start_date:
@@ -1729,17 +1729,21 @@ async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         summary_text += f"{i}. {cat}: {amt:.2f} Тг\n"
     
     # Добавляем информацию о предстоящих платежах
-    upcoming_reminders = get_upcoming_reminders(90)  # На 90 дней вперед
-    if upcoming_reminders:
-        summary_text += "\n⏰ ПРЕДСТОЯЩИЕ ПЛАТЕЖИ:\n"
-        total_upcoming = 0
-        for rem_id, title, desc, amount, start_date, end_date, sent_10, sent_3 in upcoming_reminders[:5]:  # Показываем топ-5
-            days_left = (end_date - datetime.now().date()).days
-            if days_left > 0:
-                summary_text += f"• {title}: {amount:.2f} Тг (через {days_left} дней)\n"
-                total_upcoming += amount
-        if total_upcoming > 0:
-            summary_text += f"💰 Общая сумма: {total_upcoming:.2f} Тг\n"
+    try:
+        upcoming_reminders = get_all_active_reminders()  # Получаем все активные напоминания
+        if upcoming_reminders:
+            summary_text += "\n⏰ ПРЕДСТОЯЩИЕ ПЛАТЕЖИ:\n"
+            total_upcoming = 0
+            for rem_id, title, desc, amount, start_date, end_date, sent_10, sent_3, created in upcoming_reminders[:5]:  # Показываем топ-5
+                days_left = (end_date - datetime.now().date()).days
+                if days_left > 0:
+                    summary_text += f"• {title}: {amount:.2f} Тг (через {days_left} дней)\n"
+                    total_upcoming += amount
+            if total_upcoming > 0:
+                summary_text += f"💰 Общая сумма: {total_upcoming:.2f} Тг\n"
+    except Exception as e:
+        logger.error(f"Ошибка при получении напоминаний: {e}")
+        # Продолжаем без напоминаний
     
     # Отправка отчета и сводки
     await update.message.reply_photo(photo=buf, caption=summary_text, reply_markup=get_main_menu_keyboard())
