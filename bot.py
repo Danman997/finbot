@@ -249,31 +249,95 @@ def train_model(data):
 # Обучаем (main() позже всё равно вызовет train_model(TRAINING_DATA))
 train_model(BASE_TRAIN)
 
-def classify_expense(description: str) -> str:
+def get_user_categories(user_id: int) -> list:
+    """Получает категории пользователя из файла"""
+    try:
+        folder_path = get_user_folder_path(user_id)
+        categories_file = f"{folder_path}/categories.json"
+        
+        if os.path.exists(categories_file):
+            with open(categories_file, 'r', encoding='utf-8') as f:
+                categories = json.load(f)
+            return categories
+        else:
+            # Fallback к глобальным категориям
+            return []
+    except Exception as e:
+        logger.error(f"Ошибка при получении категорий пользователя {user_id}: {e}")
+        return []
+
+def get_user_budget_plans(user_id: int) -> list:
+    """Получает планы бюджета пользователя из файла"""
+    try:
+        folder_path = get_user_folder_path(user_id)
+        budget_plans_file = f"{folder_path}/budget_plans.json"
+        
+        if os.path.exists(budget_plans_file):
+            with open(budget_plans_file, 'r', encoding='utf-8') as f:
+                plans = json.load(f)
+            return plans
+        else:
+            return []
+    except Exception as e:
+        logger.error(f"Ошибка при получении планов бюджета пользователя {user_id}: {e}")
+        return []
+
+def save_user_budget_plan(user_id: int, plan_data: dict) -> bool:
+    """Сохраняет план бюджета пользователя в файл"""
+    try:
+        folder_path = get_user_folder_path(user_id)
+        budget_plans_file = f"{folder_path}/budget_plans.json"
+        
+        # Читаем существующие планы
+        plans = get_user_budget_plans(user_id)
+        
+        # Добавляем новый план
+        plans.append(plan_data)
+        
+        # Сохраняем обратно в файл
+        with open(budget_plans_file, 'w', encoding='utf-8') as f:
+            json.dump(plans, f, ensure_ascii=False, indent=2)
+        
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка при сохранении плана бюджета пользователя {user_id}: {e}")
+        return False
+
+def classify_expense(description: str, user_id: int = None) -> str:
     """
     Возвращает категорию для расхода.
-    Порядок: словарь → фуззи → ML → 'Прочее'
+    Порядок: словарь пользователя → глобальный словарь → фуззи → ML → 'Прочее'
     """
     try:
         text_norm = normalize(description)
 
-        # 1) словарь
+        # 1) словарь пользователя (если есть user_id)
+        if user_id:
+            user_categories = get_user_categories(user_id)
+            for category in user_categories:
+                category_name = category.get('name', '')
+                keywords = category.get('keywords', [])
+                for keyword in keywords:
+                    if keyword.lower() in text_norm.lower():
+                        return category_name
+
+        # 2) глобальный словарь
         cat = dict_match_category(text_norm)
         if cat:
             return cat
         
-        # 2) фуззи
+        # 3) фуззи
         cat = fuzzy_category(text_norm)
         if cat:
             return cat
         
-        # 3) ML
+        # 4) ML
         if hasattr(classifier, "classes_") and len(getattr(classifier, "classes_", [])) > 0:
             vec = vectorizer.transform([text_norm])
             pred = classifier.predict(vec)[0]
             return pred
 
-        # 4) fallback
+        # 5) fallback
         return "Прочее"
     except Exception as e:
         logger.error(f"Ошибка при классификации: {e}. Возвращаю 'Прочее'.")
@@ -2176,7 +2240,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     
     try:
         amount = float(amount_str)
-        category = classify_expense(description)
+        category = classify_expense(description, user_id)
         transaction_date = datetime.now(timezone.utc)
         if add_expense(amount, category, description, transaction_date, user_id): 
             await update.message.reply_text(
@@ -2729,69 +2793,169 @@ def main():
         time.sleep(1)
 
 # --- Функции планирования бюджета ---
-def upsert_budget_plan(plan_month: date, total_amount: float) -> int | None:
-	conn = get_db_connection()
-	if not conn:
-		return None
-	try:
-		cursor = conn.cursor()
-		cursor.execute('''
-			INSERT INTO budget_plans (plan_month, total_amount)
-			VALUES (%s, %s)
-			ON CONFLICT (plan_month)
-			DO UPDATE SET total_amount = EXCLUDED.total_amount
-			RETURNING id
-		''', (plan_month, total_amount))
-		plan_id = cursor.fetchone()[0]
-		conn.commit()
-		return plan_id
-	except Exception as e:
-		logger.error(f"Ошибка при сохранении бюджета: {e}")
-		return None
-	finally:
-		conn.close()
+def upsert_budget_plan(plan_month: date, total_amount: float, user_id: int = None) -> int | None:
+	if user_id:
+		# Работаем с файлами пользователя
+		try:
+			plans = get_user_budget_plans(user_id)
+			
+			# Ищем существующий план на этот месяц
+			plan_id = None
+			for i, plan in enumerate(plans):
+				if plan.get('plan_month') == plan_month.isoformat():
+					# Обновляем существующий план
+					plans[i]['total_amount'] = total_amount
+					plan_id = plan.get('id', i + 1)
+					break
+			
+			if plan_id is None:
+				# Создаем новый план
+				plan_id = len(plans) + 1
+				new_plan = {
+					'id': plan_id,
+					'plan_month': plan_month.isoformat(),
+					'total_amount': total_amount,
+					'items': [],
+					'created_at': datetime.now().isoformat()
+				}
+				plans.append(new_plan)
+			
+			# Сохраняем планы обратно в файл
+			folder_path = get_user_folder_path(user_id)
+			budget_plans_file = f"{folder_path}/budget_plans.json"
+			with open(budget_plans_file, 'w', encoding='utf-8') as f:
+				json.dump(plans, f, ensure_ascii=False, indent=2)
+			
+			return plan_id
+		except Exception as e:
+			logger.error(f"Ошибка при сохранении плана бюджета пользователя {user_id}: {e}")
+			return None
+	else:
+		# Fallback к базе данных
+		conn = get_db_connection()
+		if not conn:
+			return None
+		try:
+			cursor = conn.cursor()
+			cursor.execute('''
+				INSERT INTO budget_plans (plan_month, total_amount)
+				VALUES (%s, %s)
+				ON CONFLICT (plan_month)
+				DO UPDATE SET total_amount = EXCLUDED.total_amount
+				RETURNING id
+			''', (plan_month, total_amount))
+			plan_id = cursor.fetchone()[0]
+			conn.commit()
+			return plan_id
+		except Exception as e:
+			logger.error(f"Ошибка при сохранении бюджета: {e}")
+			return None
+		finally:
+			conn.close()
 
 
-def add_budget_item(plan_id: int, category: str, amount: float, comment: str | None) -> bool:
-	conn = get_db_connection()
-	if not conn:
-		return False
-	try:
-		cursor = conn.cursor()
-		cursor.execute('''
-			INSERT INTO budget_plan_items (plan_id, category, amount, comment)
-			VALUES (%s, %s, %s, %s)
-		''', (plan_id, category, amount, comment))
-		conn.commit()
-		return True
-	except Exception as e:
-		logger.error(f"Ошибка при добавлении статьи бюджета: {e}")
-		return False
-	finally:
-		conn.close()
+def add_budget_item(plan_id: int, category: str, amount: float, comment: str | None, user_id: int = None) -> bool:
+	if user_id:
+		# Работаем с файлами пользователя
+		try:
+			plans = get_user_budget_plans(user_id)
+			
+			# Находим план с нужным ID
+			for plan in plans:
+				if plan.get('id') == plan_id:
+					# Добавляем статью в план
+					if 'items' not in plan:
+						plan['items'] = []
+					
+					new_item = {
+						'id': len(plan['items']) + 1,
+						'category': category,
+						'amount': amount,
+						'comment': comment,
+						'created_at': datetime.now().isoformat()
+					}
+					plan['items'].append(new_item)
+					break
+			
+			# Сохраняем планы обратно в файл
+			folder_path = get_user_folder_path(user_id)
+			budget_plans_file = f"{folder_path}/budget_plans.json"
+			with open(budget_plans_file, 'w', encoding='utf-8') as f:
+				json.dump(plans, f, ensure_ascii=False, indent=2)
+			
+			return True
+		except Exception as e:
+			logger.error(f"Ошибка при добавлении статьи бюджета пользователя {user_id}: {e}")
+			return False
+	else:
+		# Fallback к базе данных
+		conn = get_db_connection()
+		if not conn:
+			return False
+		try:
+			cursor = conn.cursor()
+			cursor.execute('''
+				INSERT INTO budget_plan_items (plan_id, category, amount, comment)
+				VALUES (%s, %s, %s, %s)
+			''', (plan_id, category, amount, comment))
+			conn.commit()
+			return True
+		except Exception as e:
+			logger.error(f"Ошибка при добавлении статьи бюджета: {e}")
+			return False
+		finally:
+			conn.close()
 
 
-def get_budget_plan(plan_month: date):
-	conn = get_db_connection()
-	if not conn:
-		return None, []
-	try:
-		cursor = conn.cursor()
-		cursor.execute('SELECT id, total_amount FROM budget_plans WHERE plan_month = %s', (plan_month,))
-		row = cursor.fetchone()
-		plan = None
-		if row:
-			plan = { 'id': row[0], 'total_amount': float(row[1]) }
-			cursor.execute('SELECT category, amount, comment FROM budget_plan_items WHERE plan_id = %s ORDER BY id', (row[0],))
-			items = cursor.fetchall()
-		else:
-			items = []
-		return plan, items
-	except Exception as e:
-		logger.error(f"Ошибка при получении бюджета: {e}")
-		return None, []
-	finally:
-		conn.close()
+def get_budget_plan(plan_month: date, user_id: int = None):
+	if user_id:
+		# Работаем с файлами пользователя
+		try:
+			plans = get_user_budget_plans(user_id)
+			
+			# Ищем план на нужный месяц
+			for plan in plans:
+				if plan.get('plan_month') == plan_month.isoformat():
+					items = plan.get('items', [])
+					# Конвертируем в формат, совместимый с БД
+					items_list = []
+					for item in items:
+						items_list.append((
+							item.get('category', ''),
+							item.get('amount', 0),
+							item.get('comment', '')
+						))
+					return {
+						'id': plan.get('id'),
+						'total_amount': plan.get('total_amount', 0)
+					}, items_list
+			
+			return None, []
+		except Exception as e:
+			logger.error(f"Ошибка при получении плана бюджета пользователя {user_id}: {e}")
+			return None, []
+	else:
+		# Fallback к базе данных
+		conn = get_db_connection()
+		if not conn:
+			return None, []
+		try:
+			cursor = conn.cursor()
+			cursor.execute('SELECT id, total_amount FROM budget_plans WHERE plan_month = %s', (plan_month,))
+			row = cursor.fetchone()
+			plan = None
+			if row:
+				plan = { 'id': row[0], 'total_amount': float(row[1]) }
+				cursor.execute('SELECT category, amount, comment FROM budget_plan_items WHERE plan_id = %s ORDER BY id', (row[0],))
+				items = cursor.fetchall()
+			else:
+				items = []
+			return plan, items
+		except Exception as e:
+			logger.error(f"Ошибка при получении бюджета: {e}")
+			return None, []
+		finally:
+			conn.close()
 
 def get_budget_plan_by_month(month: int, year: int):
 	"""Получить план бюджета по месяцу и году"""
@@ -2914,10 +3078,11 @@ async def planning_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 	leftover = plan_total - allocated
 	
 	# Сохраняем в БД
-	plan_id = upsert_budget_plan(plan_month, plan_total)
+	user_id = update.effective_user.id
+	plan_id = upsert_budget_plan(plan_month, plan_total, user_id)
 	if plan_id:
 		for i in items:
-			add_budget_item(plan_id, i['category'], i['amount'], i['comment'])
+			add_budget_item(plan_id, i['category'], i['amount'], i['comment'], user_id)
 	
 	summary_lines = [f"📅 Месяц: {plan_month.strftime('%m.%Y')}", f"💰 Общий бюджет: {plan_total:.2f}", "", "📦 Распределение:"]
 	for i in items:
@@ -2954,25 +3119,23 @@ async def planning_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     elif text == "➕ Добавить планирование":
         return await planning_start(update, context)
     elif text == "📋 Список планов":
-        # Покажем краткий список месяцев с суммами
-        today = datetime.now().date().replace(day=1)
-        conn = get_db_connection()
-        if not conn:
-            await update.message.reply_text("Не удалось подключиться к БД.", reply_markup=get_main_menu_keyboard())
-            return ConversationHandler.END
-        try:
-            cursor = conn.cursor()
-            cursor.execute('SELECT plan_month, total_amount, id FROM budget_plans ORDER BY plan_month DESC LIMIT 12')
-            rows = cursor.fetchall()
-        finally:
-            conn.close()
-        if not rows:
+        # Покажем краткий список месяцев с суммами из файлов пользователя
+        user_id = update.effective_user.id
+        plans = get_user_budget_plans(user_id)
+        
+        if not plans:
             await update.message.reply_text("Планы пока отсутствуют.", reply_markup=get_main_menu_keyboard())
             return ConversationHandler.END
+        
+        # Сортируем планы по дате (новые сначала)
+        plans.sort(key=lambda x: x.get('plan_month', ''), reverse=True)
+        
         text_lines = ["📋 Последние планы:"]
         kb = []
-        for i, (pm, total, pid) in enumerate(rows, 1):
-            label = f"{pm.strftime('%m.%Y')} — {float(total):.0f}"
+        for i, plan in enumerate(plans[:12], 1):  # Показываем последние 12 планов
+            plan_month = datetime.fromisoformat(plan['plan_month']).date()
+            total = plan.get('total_amount', 0)
+            label = f"{plan_month.strftime('%m.%Y')} — {float(total):.0f}"
             text_lines.append(f"{i}. {label}")
             kb.append([KeyboardButton(label)])
         
@@ -2982,7 +3145,7 @@ async def planning_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         
         await update.message.reply_text("\n".join(text_lines), reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
         # Сохраняем планы в контексте для последующего выбора
-        context.user_data['plans_list'] = rows
+        context.user_data['plans_list'] = plans
         return PLAN_MENU_STATE
     
     elif text == "🗑️ Удалить план":
@@ -3189,30 +3352,16 @@ async def show_detailed_plan(update: Update, context: ContextTypes.DEFAULT_TYPE,
         month, year = month_part.split(".")
         plan_date = datetime.strptime(f"01.{month}.{year}", "%d.%m.%Y").date()
         
-        # Получаем план из базы данных
-        conn = get_db_connection()
-        if not conn:
-            await update.message.reply_text("Не удалось подключиться к БД.", reply_markup=get_main_menu_keyboard())
+        # Получаем план из файлов пользователя
+        user_id = update.effective_user.id
+        plan, items = get_budget_plan(plan_date, user_id)
+        
+        if not plan:
+            await update.message.reply_text(f"План на {month_part} не найден.", reply_markup=get_main_menu_keyboard())
             return ConversationHandler.END
         
-        try:
-            cursor = conn.cursor()
-            # Получаем основной план
-            cursor.execute('SELECT id, total_amount FROM budget_plans WHERE plan_month = %s', (plan_date,))
-            plan_row = cursor.fetchone()
-            
-            if not plan_row:
-                await update.message.reply_text(f"План на {month_part} не найден.", reply_markup=get_main_menu_keyboard())
-                return ConversationHandler.END
-            
-            plan_id, total_amount = plan_row
-            
-            # Получаем статьи бюджета
-            cursor.execute('SELECT category, amount, comment FROM budget_plan_items WHERE plan_id = %s ORDER BY amount DESC', (plan_id,))
-            items = cursor.fetchall()
-            
-        finally:
-            conn.close()
+        plan_id = plan['id']
+        total_amount = plan['total_amount']
         
         if not items:
             # Создаем клавиатуру с кнопками управления статьями бюджета
