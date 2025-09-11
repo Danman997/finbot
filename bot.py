@@ -455,30 +455,64 @@ def init_db():
         logger.info("База данных инициализирована (все таблицы проверены/созданы).")
 
 def add_expense(amount, category, description, transaction_date, user_id=None):
-    conn = get_db_connection()
-    if not conn:
-        return False
-    try:
-        cursor = conn.cursor()
-        
-        # Получаем префикс таблиц для пользователя
-        if user_id:
-            table_prefix = get_user_table_prefix(user_id)
-            expenses_table = f"{table_prefix}_expenses"
-        else:
-            expenses_table = "expenses"
-        
-        cursor.execute(f'''
-            INSERT INTO {expenses_table} (amount, category, description, transaction_date)
-            VALUES (%s, %s, %s, %s)
-        ''', (amount, category, description, transaction_date))
-        conn.commit()
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка при добавлении расхода: {e}")
-        return False
-    finally:
-        conn.close()
+    if user_id:
+        # Работаем с файлами пользователя
+        try:
+            import csv
+            import os
+            
+            folder_path = get_user_folder_path(user_id)
+            expenses_file = f"{folder_path}/expenses.csv"
+            
+            # Читаем существующие расходы
+            expenses = []
+            if os.path.exists(expenses_file):
+                with open(expenses_file, 'r', encoding='utf-8') as f:
+                    reader = csv.DictReader(f)
+                    expenses = list(reader)
+            
+            # Генерируем новый ID
+            new_id = max([int(exp.get('id', 0)) for exp in expenses], default=0) + 1
+            
+            # Добавляем новый расход
+            new_expense = {
+                'id': str(new_id),
+                'amount': str(amount),
+                'description': description,
+                'category': category,
+                'transaction_date': transaction_date.isoformat()
+            }
+            expenses.append(new_expense)
+            
+            # Записываем обратно в файл
+            with open(expenses_file, 'w', newline='', encoding='utf-8') as f:
+                fieldnames = ['id', 'amount', 'description', 'category', 'transaction_date']
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(expenses)
+            
+            return True
+        except Exception as e:
+            logger.error(f"Ошибка при добавлении расхода в файл: {e}")
+            return False
+    else:
+        # Fallback к базе данных для совместимости
+        conn = get_db_connection()
+        if not conn:
+            return False
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO expenses (amount, category, description, transaction_date)
+                VALUES (%s, %s, %s, %s)
+            ''', (amount, category, description, transaction_date))
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Ошибка при добавлении расхода в БД: {e}")
+            return False
+        finally:
+            conn.close()
 
 def get_expense_by_id(expense_id):
     """Получить расход по ID"""
@@ -1649,25 +1683,27 @@ async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         return ConversationHandler.END
 
     try:
-        cursor = conn.cursor()
-        
-        # Получаем префикс таблиц для пользователя
         user_id = update.effective_user.id
-        table_prefix = get_user_table_prefix(user_id)
-        expenses_table = f"{table_prefix}_expenses"
+        folder_path = get_user_folder_path(user_id)
+        expenses_file = f"{folder_path}/expenses.csv"
         
-        cursor.execute(f'''
-            SELECT description, category, amount, transaction_date
-            FROM {expenses_table}
-            WHERE transaction_date BETWEEN %s AND %s
-            ORDER BY transaction_date ASC
-        ''', (start_date, end_date))
-        data = cursor.fetchall()
+        data = []
+        if os.path.exists(expenses_file):
+            import csv
+            with open(expenses_file, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    transaction_date = datetime.fromisoformat(row['transaction_date'].replace('Z', '+00:00'))
+                    if start_date <= transaction_date.date() <= end_date:
+                        data.append((
+                            row['description'],
+                            row['category'],
+                            float(row['amount']),
+                            transaction_date
+                        ))
     except Exception as e:
         await update.message.reply_text(f"Произошла ошибка при получении отчета: {e}", reply_markup=get_main_menu_keyboard())
         return ConversationHandler.END
-    finally:
-        conn.close()
 
     if not data:
         await update.message.reply_text("За выбранный период нет расходов.", reply_markup=get_main_menu_keyboard())
@@ -3243,83 +3279,168 @@ async def show_detailed_plan(update: Update, context: ContextTypes.DEFAULT_TYPE,
 # --- Функции для работы с напоминаниями (упрощенные) ---
 def add_payment_reminder(title, description, amount, start_date, end_date, user_id=None):
     """Добавить новое напоминание о платеже"""
-    conn = get_db_connection()
-    if not conn:
-        return False
-    try:
-        cursor = conn.cursor()
-        
-        # Получаем префикс таблиц для пользователя
-        if user_id:
-            table_prefix = get_user_table_prefix(user_id)
-            reminders_table = f"{table_prefix}_payment_reminders"
-        else:
-            reminders_table = "payment_reminders"
-        
-        cursor.execute(f'''
-            INSERT INTO {reminders_table} (title, description, amount, start_date, end_date)
-            VALUES (%s, %s, %s, %s, %s)
-        ''', (title, description, amount, start_date, end_date))
-        conn.commit()
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка при добавлении напоминания: {e}")
-        return False
-    finally:
-        conn.close()
+    if user_id:
+        # Работаем с файлами пользователя
+        try:
+            import json
+            import os
+            
+            folder_path = get_user_folder_path(user_id)
+            reminders_file = f"{folder_path}/reminders.json"
+            
+            # Читаем существующие напоминания
+            reminders = []
+            if os.path.exists(reminders_file):
+                with open(reminders_file, 'r', encoding='utf-8') as f:
+                    reminders = json.load(f)
+            
+            # Генерируем новый ID
+            new_id = max([rem.get('id', 0) for rem in reminders], default=0) + 1
+            
+            # Добавляем новое напоминание
+            new_reminder = {
+                'id': new_id,
+                'title': title,
+                'description': description,
+                'amount': amount,
+                'start_date': start_date.isoformat(),
+                'end_date': end_date.isoformat(),
+                'reminder_10_days': False,
+                'reminder_3_days': False,
+                'is_active': True,
+                'created_at': datetime.now().isoformat()
+            }
+            reminders.append(new_reminder)
+            
+            # Записываем обратно в файл
+            with open(reminders_file, 'w', encoding='utf-8') as f:
+                json.dump(reminders, f, ensure_ascii=False, indent=2)
+            
+            return True
+        except Exception as e:
+            logger.error(f"Ошибка при добавлении напоминания в файл: {e}")
+            return False
+    else:
+        # Fallback к базе данных
+        conn = get_db_connection()
+        if not conn:
+            return False
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO payment_reminders (title, description, amount, start_date, end_date)
+                VALUES (%s, %s, %s, %s, %s)
+            ''', (title, description, amount, start_date, end_date))
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Ошибка при добавлении напоминания в БД: {e}")
+            return False
+        finally:
+            conn.close()
 
 def get_all_active_reminders(user_id=None):
     """Получить все активные напоминания"""
-    conn = get_db_connection()
-    if not conn:
-        return []
-    try:
-        cursor = conn.cursor()
-        
-        # Получаем префикс таблиц для пользователя
-        if user_id:
-            table_prefix = get_user_table_prefix(user_id)
-            reminders_table = f"{table_prefix}_payment_reminders"
-        else:
-            reminders_table = "payment_reminders"
-        
-        cursor.execute(f'''
-            SELECT id, title, description, amount, start_date, end_date, 
-                   reminder_10_days, reminder_3_days, created_at
-            FROM {reminders_table} 
-            WHERE is_active = TRUE 
-            ORDER BY end_date ASC
-        ''')
-        return cursor.fetchall()
-    except Exception as e:
-        logger.error(f"Ошибка при получении напоминаний: {e}")
-        return []
-    finally:
-        conn.close()
+    if user_id:
+        # Работаем с файлами пользователя
+        try:
+            import json
+            import os
+            
+            folder_path = get_user_folder_path(user_id)
+            reminders_file = f"{folder_path}/reminders.json"
+            
+            if not os.path.exists(reminders_file):
+                return []
+            
+            with open(reminders_file, 'r', encoding='utf-8') as f:
+                reminders = json.load(f)
+            
+            # Фильтруем только активные напоминания и конвертируем в формат БД
+            active_reminders = []
+            for rem in reminders:
+                if rem.get('is_active', True):
+                    active_reminders.append((
+                        rem['id'],
+                        rem['title'],
+                        rem['description'],
+                        rem['amount'],
+                        datetime.fromisoformat(rem['start_date']).date(),
+                        datetime.fromisoformat(rem['end_date']).date(),
+                        rem.get('reminder_10_days', False),
+                        rem.get('reminder_3_days', False),
+                        datetime.fromisoformat(rem['created_at'])
+                    ))
+            
+            return active_reminders
+        except Exception as e:
+            logger.error(f"Ошибка при получении напоминаний из файла: {e}")
+            return []
+    else:
+        # Fallback к базе данных
+        conn = get_db_connection()
+        if not conn:
+            return []
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT id, title, description, amount, start_date, end_date, 
+                       reminder_10_days, reminder_3_days, created_at
+                FROM payment_reminders 
+                WHERE is_active = TRUE 
+                ORDER BY end_date ASC
+            ''')
+            return cursor.fetchall()
+        except Exception as e:
+            logger.error(f"Ошибка при получении напоминаний из БД: {e}")
+            return []
+        finally:
+            conn.close()
 
 def delete_reminder(reminder_id, user_id=None):
     """Удалить напоминание"""
-    conn = get_db_connection()
-    if not conn:
-        return False
-    try:
-        cursor = conn.cursor()
-        
-        # Получаем префикс таблиц для пользователя
-        if user_id:
-            table_prefix = get_user_table_prefix(user_id)
-            reminders_table = f"{table_prefix}_payment_reminders"
-        else:
-            reminders_table = "payment_reminders"
-        
-        cursor.execute(f'DELETE FROM {reminders_table} WHERE id = %s', (reminder_id,))
-        conn.commit()
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка при удалении напоминания: {e}")
-        return False
-    finally:
-        conn.close()
+    if user_id:
+        # Работаем с файлами пользователя
+        try:
+            import json
+            import os
+            
+            folder_path = get_user_folder_path(user_id)
+            reminders_file = f"{folder_path}/reminders.json"
+            
+            if not os.path.exists(reminders_file):
+                return False
+            
+            # Читаем существующие напоминания
+            with open(reminders_file, 'r', encoding='utf-8') as f:
+                reminders = json.load(f)
+            
+            # Удаляем напоминание с указанным ID
+            reminders = [rem for rem in reminders if rem['id'] != reminder_id]
+            
+            # Записываем обратно в файл
+            with open(reminders_file, 'w', encoding='utf-8') as f:
+                json.dump(reminders, f, ensure_ascii=False, indent=2)
+            
+            return True
+        except Exception as e:
+            logger.error(f"Ошибка при удалении напоминания из файла: {e}")
+            return False
+    else:
+        # Fallback к базе данных
+        conn = get_db_connection()
+        if not conn:
+            return False
+        try:
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM payment_reminders WHERE id = %s', (reminder_id,))
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Ошибка при удалении напоминания из БД: {e}")
+            return False
+        finally:
+            conn.close()
 
 async def reminder_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Главное меню напоминаний (упрощенное)"""
@@ -4220,16 +4341,70 @@ def get_authorized_users_list() -> list:
 
 # --- ФУНКЦИИ СОЗДАНИЯ ПЕРСОНАЛЬНЫХ ПАПОК (Railway/Cloud) ---
 def create_user_folder(username: str, folder_name: str, user_id: int) -> tuple[bool, str]:
-    """Создает персональную папку пользователя в базе данных (для Railway)"""
+    """Создает персональную папку пользователя с файлами"""
     try:
+        import os
+        import json
+        import csv
+        
+        # Создаем папку пользователя
+        user_folder_path = f"user_data/{folder_name}"
+        os.makedirs(user_folder_path, exist_ok=True)
+        
+        # Создаем файл расходов (CSV)
+        expenses_file = f"{user_folder_path}/expenses.csv"
+        if not os.path.exists(expenses_file):
+            with open(expenses_file, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(['id', 'amount', 'description', 'category', 'transaction_date'])
+        
+        # Создаем файл напоминаний (JSON)
+        reminders_file = f"{user_folder_path}/reminders.json"
+        if not os.path.exists(reminders_file):
+            with open(reminders_file, 'w', encoding='utf-8') as f:
+                json.dump([], f, ensure_ascii=False, indent=2)
+        
+        # Создаем файл планов бюджета (JSON)
+        budget_plans_file = f"{user_folder_path}/budget_plans.json"
+        if not os.path.exists(budget_plans_file):
+            with open(budget_plans_file, 'w', encoding='utf-8') as f:
+                json.dump([], f, ensure_ascii=False, indent=2)
+        
+        # Создаем файл категорий (JSON)
+        categories_file = f"{user_folder_path}/categories.json"
+        if not os.path.exists(categories_file):
+            default_categories = [
+                {"name": "Продукты", "keywords": ["хлеб", "молоко", "мясо", "овощи", "фрукты"]},
+                {"name": "Транспорт", "keywords": ["бензин", "такси", "автобус", "метро"]},
+                {"name": "Развлечения", "keywords": ["кино", "игры", "кафе", "ресторан"]},
+                {"name": "Здоровье", "keywords": ["лекарства", "врач", "спорт", "аптека"]},
+                {"name": "Одежда", "keywords": ["рубашка", "джинсы", "обувь", "куртка"]},
+                {"name": "Коммунальные", "keywords": ["электричество", "вода", "газ", "интернет"]},
+                {"name": "Образование", "keywords": ["книги", "курсы", "учеба", "тренинги"]},
+                {"name": "Прочее", "keywords": []}
+            ]
+            with open(categories_file, 'w', encoding='utf-8') as f:
+                json.dump(default_categories, f, ensure_ascii=False, indent=2)
+        
+        # Создаем файл настроек пользователя
+        settings_file = f"{user_folder_path}/settings.json"
+        if not os.path.exists(settings_file):
+            user_settings = {
+                "currency": "Tg",
+                "language": "ru",
+                "notifications": True,
+                "auto_classification": True,
+                "created_at": datetime.now().isoformat()
+            }
+            with open(settings_file, 'w', encoding='utf-8') as f:
+                json.dump(user_settings, f, ensure_ascii=False, indent=2)
+        
         # Создаем запись пользователя в базе данных
         conn = get_db_connection()
         if not conn:
             return False, "Ошибка подключения к базе данных"
         
         cursor = conn.cursor()
-        
-        # Таблицы уже созданы в init_db(), просто используем их
         
         # Вставляем данные пользователя
         logger.info(f"Создание записи в user_folders: username={username}, user_id={user_id}, folder_name={folder_name}")
@@ -4247,7 +4422,8 @@ def create_user_folder(username: str, folder_name: str, user_id: int) -> tuple[b
                 "currency": "Tg",
                 "language": "ru", 
                 "notifications": True,
-                "auto_classification": True
+                "auto_classification": True,
+                "folder_path": user_folder_path
             }),
             json.dumps({
                 "add_expenses": True,
@@ -4258,118 +4434,11 @@ def create_user_folder(username: str, folder_name: str, user_id: int) -> tuple[b
             })
         ))
         
-        # Создаем персональные таблицы для пользователя
-        table_prefix = f"user_{folder_name.lower()}"
-        
-        # Создаем таблицу расходов для пользователя
-        cursor.execute(f'''
-            CREATE TABLE IF NOT EXISTS {table_prefix}_expenses (
-                id SERIAL PRIMARY KEY,
-                amount NUMERIC(10, 2) NOT NULL,
-                description TEXT,
-                category VARCHAR(100) NOT NULL,
-                transaction_date TIMESTAMP WITH TIME ZONE NOT NULL
-            );
-        ''')
-        
-        # Создаем таблицу напоминаний для пользователя
-        cursor.execute(f'''
-            CREATE TABLE IF NOT EXISTS {table_prefix}_payment_reminders (
-                id SERIAL PRIMARY KEY,
-                title VARCHAR(200) NOT NULL,
-                description TEXT,
-                amount NUMERIC(10, 2) NOT NULL,
-                start_date DATE NOT NULL,
-                end_date DATE NOT NULL,
-                reminder_10_days BOOLEAN DEFAULT FALSE,
-                reminder_3_days BOOLEAN DEFAULT FALSE,
-                is_active BOOLEAN DEFAULT TRUE,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-            );
-        ''')
-        
-        # Создаем таблицы для планирования бюджета пользователя
-        cursor.execute(f'''
-            CREATE TABLE IF NOT EXISTS {table_prefix}_budget_plans (
-                id SERIAL PRIMARY KEY,
-                plan_month DATE NOT NULL UNIQUE,
-                total_amount NUMERIC(12,2) NOT NULL,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                group_id INTEGER DEFAULT 1
-            );
-        ''')
-        
-        cursor.execute(f'''
-            CREATE TABLE IF NOT EXISTS {table_prefix}_budget_items (
-                id SERIAL PRIMARY KEY,
-                plan_id INTEGER REFERENCES {table_prefix}_budget_plans(id) ON DELETE CASCADE,
-                category VARCHAR(100) NOT NULL,
-                amount NUMERIC(12,2) NOT NULL,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-            );
-        ''')
-        
-        # Создаем таблицу категорий для пользователя
-        cursor.execute(f'''
-            CREATE TABLE IF NOT EXISTS {table_prefix}_categories (
-                id SERIAL PRIMARY KEY,
-                name VARCHAR(100) NOT NULL UNIQUE,
-                keywords TEXT[],
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-            );
-        ''')
-        
-        # Создаем стандартные категории для пользователя
-        default_categories = [
-            ("Продукты", ["хлеб", "молоко", "мясо", "овощи", "фрукты"]),
-            ("Транспорт", ["бензин", "такси", "автобус", "метро"]),
-            ("Развлечения", ["кино", "игры", "кафе", "ресторан"]),
-            ("Здоровье", ["лекарства", "врач", "спорт", "аптека"]),
-            ("Одежда", ["рубашка", "джинсы", "обувь", "куртка"]),
-            ("Коммунальные", ["электричество", "вода", "газ", "интернет"]),
-            ("Образование", ["книги", "курсы", "учеба", "тренинги"]),
-            ("Прочее", [])
-        ]
-        
-        # Добавляем стандартные категории в таблицу пользователя
-        for category_name, keywords in default_categories:
-            cursor.execute(f'''
-                INSERT INTO {table_prefix}_categories (name, keywords)
-                VALUES (%s, %s)
-                ON CONFLICT (name) DO NOTHING
-            ''', (category_name, keywords))
-        
-        # Обновляем запись пользователя с информацией о таблицах
-        cursor.execute('''
-            UPDATE user_folders 
-            SET settings = %s
-            WHERE username = %s
-        ''', (
-            json.dumps({
-                "currency": "Tg",
-                "language": "ru", 
-                "notifications": True,
-                "auto_classification": True,
-                "table_prefix": table_prefix
-            }),
-            username
-        ))
-        
         conn.commit()
-        
-        # Проверяем, что запись была создана
-        cursor.execute('SELECT COUNT(*) FROM user_folders WHERE username = %s', (username,))
-        count = cursor.fetchone()[0]
-        logger.info(f"Количество записей для пользователя {username}: {count}")
-        
         conn.close()
         
-        if count > 0:
-            logger.info(f"Создана персональная папка в БД для пользователя {username}: {folder_name}")
-            return True, f"Персональная папка создана в облаке: {folder_name}"
-        else:
-            logger.error(f"Не удалось создать запись для пользователя {username}")
-            return False, "Ошибка при создании записи в базе данных"
+        logger.info(f"Создана персональная папка для пользователя {username}: {user_folder_path}")
+        return True, f"Персональная папка создана: {folder_name}"
         
     except Exception as e:
         logger.error(f"Ошибка при создании папки пользователя {username}: {e}")
@@ -4377,12 +4446,12 @@ def create_user_folder(username: str, folder_name: str, user_id: int) -> tuple[b
 
 # Функция create_user_config_files удалена - теперь используется база данных
 
-def get_user_table_prefix(user_id: int) -> str:
-    """Получает префикс таблиц для пользователя"""
+def get_user_folder_path(user_id: int) -> str:
+    """Получает путь к папке пользователя"""
     try:
         conn = get_db_connection()
         if not conn:
-            return "expenses"  # Fallback к основной таблице
+            return "user_data/default"  # Fallback к папке по умолчанию
         
         cursor = conn.cursor()
         cursor.execute('''
@@ -4395,12 +4464,12 @@ def get_user_table_prefix(user_id: int) -> str:
         
         if result and result[0]:
             settings = json.loads(result[0])
-            return settings.get('table_prefix', 'expenses')
+            return settings.get('folder_path', 'user_data/default')
         
-        return "expenses"  # Fallback к основной таблице
+        return "user_data/default"  # Fallback к папке по умолчанию
     except Exception as e:
-        logger.error(f"Ошибка при получении префикса таблиц для пользователя {user_id}: {e}")
-        return "expenses"  # Fallback к основной таблице
+        logger.error(f"Ошибка при получении пути папки для пользователя {user_id}: {e}")
+        return "user_data/default"  # Fallback к папке по умолчанию
 
 def get_user_folder_info(username: str, user_id: int) -> dict:
     """Возвращает информацию о папке пользователя из базы данных"""
