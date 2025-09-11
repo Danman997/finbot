@@ -461,17 +461,17 @@ def add_expense(amount, category, description, transaction_date, user_id=None):
     try:
         cursor = conn.cursor()
         
-        # Определяем group_id для пользователя
-        group_id = 1  # По умолчанию
+        # Получаем префикс таблиц для пользователя
         if user_id:
-            group_info = get_user_group(user_id)
-            if group_info:
-                group_id = group_info["id"]
+            table_prefix = get_user_table_prefix(user_id)
+            expenses_table = f"{table_prefix}_expenses"
+        else:
+            expenses_table = "expenses"
         
-        cursor.execute('''
-            INSERT INTO expenses (amount, category, description, transaction_date, group_id)
-            VALUES (%s, %s, %s, %s, %s)
-        ''', (amount, category, description, transaction_date, group_id))
+        cursor.execute(f'''
+            INSERT INTO {expenses_table} (amount, category, description, transaction_date)
+            VALUES (%s, %s, %s, %s)
+        ''', (amount, category, description, transaction_date))
         conn.commit()
         return True
     except Exception as e:
@@ -1650,9 +1650,15 @@ async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
     try:
         cursor = conn.cursor()
-        cursor.execute('''
+        
+        # Получаем префикс таблиц для пользователя
+        user_id = update.effective_user.id
+        table_prefix = get_user_table_prefix(user_id)
+        expenses_table = f"{table_prefix}_expenses"
+        
+        cursor.execute(f'''
             SELECT description, category, amount, transaction_date
-            FROM expenses
+            FROM {expenses_table}
             WHERE transaction_date BETWEEN %s AND %s
             ORDER BY transaction_date ASC
         ''', (start_date, end_date))
@@ -3235,15 +3241,23 @@ async def show_detailed_plan(update: Update, context: ContextTypes.DEFAULT_TYPE,
         return ConversationHandler.END
 
 # --- Функции для работы с напоминаниями (упрощенные) ---
-def add_payment_reminder(title, description, amount, start_date, end_date):
+def add_payment_reminder(title, description, amount, start_date, end_date, user_id=None):
     """Добавить новое напоминание о платеже"""
     conn = get_db_connection()
     if not conn:
         return False
     try:
         cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO payment_reminders (title, description, amount, start_date, end_date)
+        
+        # Получаем префикс таблиц для пользователя
+        if user_id:
+            table_prefix = get_user_table_prefix(user_id)
+            reminders_table = f"{table_prefix}_payment_reminders"
+        else:
+            reminders_table = "payment_reminders"
+        
+        cursor.execute(f'''
+            INSERT INTO {reminders_table} (title, description, amount, start_date, end_date)
             VALUES (%s, %s, %s, %s, %s)
         ''', (title, description, amount, start_date, end_date))
         conn.commit()
@@ -3254,17 +3268,25 @@ def add_payment_reminder(title, description, amount, start_date, end_date):
     finally:
         conn.close()
 
-def get_all_active_reminders():
+def get_all_active_reminders(user_id=None):
     """Получить все активные напоминания"""
     conn = get_db_connection()
     if not conn:
         return []
     try:
         cursor = conn.cursor()
-        cursor.execute('''
+        
+        # Получаем префикс таблиц для пользователя
+        if user_id:
+            table_prefix = get_user_table_prefix(user_id)
+            reminders_table = f"{table_prefix}_payment_reminders"
+        else:
+            reminders_table = "payment_reminders"
+        
+        cursor.execute(f'''
             SELECT id, title, description, amount, start_date, end_date, 
                    reminder_10_days, reminder_3_days, created_at
-            FROM payment_reminders 
+            FROM {reminders_table} 
             WHERE is_active = TRUE 
             ORDER BY end_date ASC
         ''')
@@ -3275,14 +3297,22 @@ def get_all_active_reminders():
     finally:
         conn.close()
 
-def delete_reminder(reminder_id):
+def delete_reminder(reminder_id, user_id=None):
     """Удалить напоминание"""
     conn = get_db_connection()
     if not conn:
         return False
     try:
         cursor = conn.cursor()
-        cursor.execute('DELETE FROM payment_reminders WHERE id = %s', (reminder_id,))
+        
+        # Получаем префикс таблиц для пользователя
+        if user_id:
+            table_prefix = get_user_table_prefix(user_id)
+            reminders_table = f"{table_prefix}_payment_reminders"
+        else:
+            reminders_table = "payment_reminders"
+        
+        cursor.execute(f'DELETE FROM {reminders_table} WHERE id = %s', (reminder_id,))
         conn.commit()
         return True
     except Exception as e:
@@ -3326,7 +3356,7 @@ async def reminder_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         return REMINDER_TITLE_STATE
     
     elif text == "📋 Список напоминаний":
-        reminders = get_all_active_reminders()
+        reminders = get_all_active_reminders(user_id)
         if not reminders:
             await update.message.reply_text(
                 "У вас нет активных напоминаний.",
@@ -3368,7 +3398,7 @@ async def reminder_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         return REMINDER_MENU_STATE
     
     elif text == "🗑️ Удалить напоминание":
-        reminders = get_all_active_reminders()
+        reminders = get_all_active_reminders(user_id)
         if not reminders:
             await update.message.reply_text(
                 "У вас нет активных напоминаний для удаления.",
@@ -3510,7 +3540,7 @@ async def reminder_end_date_input(update: Update, context: ContextTypes.DEFAULT_
     amount = context.user_data['reminder_amount']
     start_date = context.user_data['reminder_start_date']
     
-    if add_payment_reminder(title, desc, amount, start_date, end_date):
+    if add_payment_reminder(title, desc, amount, start_date, end_date, user_id):
         days_left = (end_date - datetime.now().date()).days
         
         await update.message.reply_text(
@@ -3535,6 +3565,7 @@ async def reminder_end_date_input(update: Update, context: ContextTypes.DEFAULT_
 
 async def reminder_delete_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Подтверждение удаления напоминания"""
+    user_id = update.effective_user.id
     text = update.message.text
     
     if text == "🔙 Назад":
@@ -3559,7 +3590,7 @@ async def reminder_delete_confirm(update: Update, context: ContextTypes.DEFAULT_
                 title = reminder[1]
                 
                 # Удаляем напоминание из БД
-                if delete_reminder(rem_id):
+                if delete_reminder(rem_id, user_id):
                     await update.message.reply_text(
                         f"✅ Напоминание '{title}' успешно удалено!",
                         reply_markup=get_main_menu_keyboard()
@@ -4227,6 +4258,67 @@ def create_user_folder(username: str, folder_name: str, user_id: int) -> tuple[b
             })
         ))
         
+        # Создаем персональные таблицы для пользователя
+        table_prefix = f"user_{folder_name.lower()}"
+        
+        # Создаем таблицу расходов для пользователя
+        cursor.execute(f'''
+            CREATE TABLE IF NOT EXISTS {table_prefix}_expenses (
+                id SERIAL PRIMARY KEY,
+                amount NUMERIC(10, 2) NOT NULL,
+                description TEXT,
+                category VARCHAR(100) NOT NULL,
+                transaction_date TIMESTAMP WITH TIME ZONE NOT NULL
+            );
+        ''')
+        
+        # Создаем таблицу напоминаний для пользователя
+        cursor.execute(f'''
+            CREATE TABLE IF NOT EXISTS {table_prefix}_payment_reminders (
+                id SERIAL PRIMARY KEY,
+                title VARCHAR(200) NOT NULL,
+                description TEXT,
+                amount NUMERIC(10, 2) NOT NULL,
+                start_date DATE NOT NULL,
+                end_date DATE NOT NULL,
+                reminder_10_days BOOLEAN DEFAULT FALSE,
+                reminder_3_days BOOLEAN DEFAULT FALSE,
+                is_active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            );
+        ''')
+        
+        # Создаем таблицы для планирования бюджета пользователя
+        cursor.execute(f'''
+            CREATE TABLE IF NOT EXISTS {table_prefix}_budget_plans (
+                id SERIAL PRIMARY KEY,
+                plan_month DATE NOT NULL UNIQUE,
+                total_amount NUMERIC(12,2) NOT NULL,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                group_id INTEGER DEFAULT 1
+            );
+        ''')
+        
+        cursor.execute(f'''
+            CREATE TABLE IF NOT EXISTS {table_prefix}_budget_items (
+                id SERIAL PRIMARY KEY,
+                plan_id INTEGER REFERENCES {table_prefix}_budget_plans(id) ON DELETE CASCADE,
+                category VARCHAR(100) NOT NULL,
+                amount NUMERIC(12,2) NOT NULL,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            );
+        ''')
+        
+        # Создаем таблицу категорий для пользователя
+        cursor.execute(f'''
+            CREATE TABLE IF NOT EXISTS {table_prefix}_categories (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(100) NOT NULL UNIQUE,
+                keywords TEXT[],
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            );
+        ''')
+        
         # Создаем стандартные категории для пользователя
         default_categories = [
             ("Продукты", ["хлеб", "молоко", "мясо", "овощи", "фрукты"]),
@@ -4239,8 +4331,29 @@ def create_user_folder(username: str, folder_name: str, user_id: int) -> tuple[b
             ("Прочее", [])
         ]
         
-        # Категории и настройки будут созданы при первом входе пользователя
-        # когда user_id будет обновлен на реальный
+        # Добавляем стандартные категории в таблицу пользователя
+        for category_name, keywords in default_categories:
+            cursor.execute(f'''
+                INSERT INTO {table_prefix}_categories (name, keywords)
+                VALUES (%s, %s)
+                ON CONFLICT (name) DO NOTHING
+            ''', (category_name, keywords))
+        
+        # Обновляем запись пользователя с информацией о таблицах
+        cursor.execute('''
+            UPDATE user_folders 
+            SET settings = %s
+            WHERE username = %s
+        ''', (
+            json.dumps({
+                "currency": "Tg",
+                "language": "ru", 
+                "notifications": True,
+                "auto_classification": True,
+                "table_prefix": table_prefix
+            }),
+            username
+        ))
         
         conn.commit()
         
@@ -4263,6 +4376,31 @@ def create_user_folder(username: str, folder_name: str, user_id: int) -> tuple[b
         return False, f"Ошибка при создании папки: {e}"
 
 # Функция create_user_config_files удалена - теперь используется база данных
+
+def get_user_table_prefix(user_id: int) -> str:
+    """Получает префикс таблиц для пользователя"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return "expenses"  # Fallback к основной таблице
+        
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT settings FROM user_folders 
+            WHERE user_id = %s
+        ''', (user_id,))
+        
+        result = cursor.fetchone()
+        conn.close()
+        
+        if result and result[0]:
+            settings = json.loads(result[0])
+            return settings.get('table_prefix', 'expenses')
+        
+        return "expenses"  # Fallback к основной таблице
+    except Exception as e:
+        logger.error(f"Ошибка при получении префикса таблиц для пользователя {user_id}: {e}")
+        return "expenses"  # Fallback к основной таблице
 
 def get_user_folder_info(username: str, user_id: int) -> dict:
     """Возвращает информацию о папке пользователя из базы данных"""
