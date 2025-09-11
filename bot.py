@@ -746,6 +746,31 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         reply_markup=get_main_menu_keyboard()
     )
 
+async def check_folders(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Временная команда для проверки папок пользователей"""
+    try:
+        import os
+        
+        # Проверяем папку user_data
+        if os.path.exists("user_data"):
+            folders = os.listdir("user_data")
+            message = f"📁 Папка user_data найдена!\n\nСодержимое:\n"
+            for folder in folders:
+                folder_path = f"user_data/{folder}"
+                if os.path.isdir(folder_path):
+                    files = os.listdir(folder_path)
+                    message += f"📂 {folder}:\n"
+                    for file in files:
+                        message += f"  📄 {file}\n"
+                    message += "\n"
+        else:
+            message = "❌ Папка user_data не найдена!"
+        
+        await update.message.reply_text(message)
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка при проверке папок: {e}")
+
 # --- АДМИН-ФУНКЦИИ ---
 async def admin_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработчик админ-меню"""
@@ -2617,6 +2642,7 @@ def main():
     application.add_handler(admin_conv_handler)
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("menu", start))
+    application.add_handler(CommandHandler("check_folders", check_folders))
     
     # Обработчик для аутентификации (должен быть перед общим обработчиком сообщений)
     application.add_handler(MessageHandler(
@@ -4347,8 +4373,38 @@ def create_user_folder(username: str, folder_name: str, user_id: int) -> tuple[b
         import json
         import csv
         
-        # Создаем папку пользователя
-        user_folder_path = f"user_data/{folder_name}"
+        # Создаем папку пользователя (конвертируем кириллицу в латиницу)
+        def transliterate_ru_to_en(text):
+            """Простая транслитерация кириллицы в латиницу"""
+            translit_map = {
+                'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'yo',
+                'ж': 'zh', 'з': 'z', 'и': 'i', 'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm',
+                'н': 'n', 'о': 'o', 'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u',
+                'ф': 'f', 'х': 'h', 'ц': 'ts', 'ч': 'ch', 'ш': 'sh', 'щ': 'sch',
+                'ъ': '', 'ы': 'y', 'ь': '', 'э': 'e', 'ю': 'yu', 'я': 'ya',
+                'А': 'A', 'Б': 'B', 'В': 'V', 'Г': 'G', 'Д': 'D', 'Е': 'E', 'Ё': 'Yo',
+                'Ж': 'Zh', 'З': 'Z', 'И': 'I', 'Й': 'Y', 'К': 'K', 'Л': 'L', 'М': 'M',
+                'Н': 'N', 'О': 'O', 'П': 'P', 'Р': 'R', 'С': 'S', 'Т': 'T', 'У': 'U',
+                'Ф': 'F', 'Х': 'H', 'Ц': 'Ts', 'Ч': 'Ch', 'Ш': 'Sh', 'Щ': 'Sch',
+                'Ъ': '', 'Ы': 'Y', 'Ь': '', 'Э': 'E', 'Ю': 'Yu', 'Я': 'Ya'
+            }
+            
+            result = ''
+            for char in text:
+                if char in translit_map:
+                    result += translit_map[char]
+                else:
+                    result += char
+            return result
+        
+        # Конвертируем название папки
+        safe_folder_name = transliterate_ru_to_en(folder_name).lower()
+        # Убираем пробелы и специальные символы, оставляем только буквы, цифры и подчеркивания
+        safe_folder_name = re.sub(r'[^a-z0-9_]', '_', safe_folder_name)
+        # Убираем множественные подчеркивания
+        safe_folder_name = re.sub(r'_+', '_', safe_folder_name).strip('_')
+        
+        user_folder_path = f"user_data/{safe_folder_name}"
         os.makedirs(user_folder_path, exist_ok=True)
         
         # Создаем файл расходов (CSV)
@@ -4464,7 +4520,34 @@ def get_user_folder_path(user_id: int) -> str:
         
         if result and result[0]:
             settings = json.loads(result[0])
-            return settings.get('folder_path', 'user_data/default')
+            folder_path = settings.get('folder_path', 'user_data/default')
+            # Если путь содержит кириллицу, конвертируем его
+            if any('\u0400' <= char <= '\u04FF' for char in folder_path):
+                # Извлекаем название папки из пути
+                folder_name = folder_path.split('/')[-1]
+                # Конвертируем название папки
+                def transliterate_ru_to_en(text):
+                    translit_map = {
+                        'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'yo',
+                        'ж': 'zh', 'з': 'z', 'и': 'i', 'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm',
+                        'н': 'n', 'о': 'o', 'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u',
+                        'ф': 'f', 'х': 'h', 'ц': 'ts', 'ч': 'ch', 'ш': 'sh', 'щ': 'sch',
+                        'ъ': '', 'ы': 'y', 'ь': '', 'э': 'e', 'ю': 'yu', 'я': 'ya'
+                    }
+                    result = ''
+                    for char in text:
+                        if char in translit_map:
+                            result += translit_map[char]
+                        else:
+                            result += char
+                    return result
+                
+                safe_folder_name = transliterate_ru_to_en(folder_name).lower()
+                safe_folder_name = re.sub(r'[^a-z0-9_]', '_', safe_folder_name)
+                safe_folder_name = re.sub(r'_+', '_', safe_folder_name).strip('_')
+                folder_path = f"user_data/{safe_folder_name}"
+            
+            return folder_path
         
         return "user_data/default"  # Fallback к папке по умолчанию
     except Exception as e:
