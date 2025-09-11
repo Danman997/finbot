@@ -249,6 +249,11 @@ def train_model(data):
 # Обучаем (main() позже всё равно вызовет train_model(TRAINING_DATA))
 train_model(BASE_TRAIN)
 
+def is_legacy_user(user_id: int) -> bool:
+    """Проверяет, является ли пользователь 'старым' (должен использовать PostgreSQL)"""
+    legacy_user_ids = [498410375, 651498165]
+    return user_id in legacy_user_ids
+
 def get_user_categories(user_id: int) -> list:
     """Получает категории пользователя из файла"""
     try:
@@ -520,73 +525,94 @@ def init_db():
 
 def add_expense(amount, category, description, transaction_date, user_id=None):
     if user_id:
-        # Работаем с файлами пользователя
-        try:
-            import csv
-            import os
-            
-            folder_path = get_user_folder_path(user_id)
-            logger.info(f"Попытка добавить расход для пользователя {user_id}, папка: {folder_path}")
-            
-            if not folder_path:
-                logger.error(f"Не удалось получить путь к папке пользователя {user_id}")
+        # Проверяем, является ли пользователь "старым" (использует PostgreSQL)
+        if is_legacy_user(user_id):
+            logger.info(f"Пользователь {user_id} - старый, используем PostgreSQL")
+            # Используем PostgreSQL для старых пользователей
+            conn = get_db_connection()
+            if not conn:
                 return False
+            try:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO expenses (amount, category, description, transaction_date)
+                    VALUES (%s, %s, %s, %s)
+                ''', (amount, category, description, transaction_date))
+                conn.commit()
+                logger.info(f"Расход успешно добавлен в PostgreSQL для пользователя {user_id}")
+                return True
+            except Exception as e:
+                logger.error(f"Ошибка при добавлении расхода в PostgreSQL для пользователя {user_id}: {e}")
+                return False
+            finally:
+                conn.close()
+        else:
+            # Работаем с файлами для новых пользователей
+            try:
+                import csv
+                import os
                 
-            if not os.path.exists(folder_path):
-                logger.warning(f"Папка пользователя {user_id} не существует: {folder_path}. Создаем...")
-                # Пытаемся создать папку для пользователя
-                try:
-                    create_user_folder(user_id, f"user_{user_id}")
-                    folder_path = get_user_folder_path(user_id)
-                    if not os.path.exists(folder_path):
-                        # Создаем папку вручную
-                        os.makedirs(folder_path, exist_ok=True)
-                        # Создаем файл расходов
-                        expenses_file = f"{folder_path}/expenses.csv"
-                        with open(expenses_file, 'w', newline='', encoding='utf-8') as f:
-                            fieldnames = ['id', 'amount', 'description', 'category', 'transaction_date']
-                            writer = csv.DictWriter(f, fieldnames=fieldnames)
-                            writer.writeheader()
-                        logger.info(f"Создана папка и файл расходов для пользователя {user_id}")
-                except Exception as e:
-                    logger.error(f"Ошибка при создании папки для пользователя {user_id}: {e}")
+                folder_path = get_user_folder_path(user_id)
+                logger.info(f"Попытка добавить расход для пользователя {user_id}, папка: {folder_path}")
+                
+                if not folder_path:
+                    logger.error(f"Не удалось получить путь к папке пользователя {user_id}")
                     return False
+                    
+                if not os.path.exists(folder_path):
+                    logger.warning(f"Папка пользователя {user_id} не существует: {folder_path}. Создаем...")
+                    # Пытаемся создать папку для пользователя
+                    try:
+                        create_user_folder(user_id, f"user_{user_id}")
+                        folder_path = get_user_folder_path(user_id)
+                        if not os.path.exists(folder_path):
+                            # Создаем папку вручную
+                            os.makedirs(folder_path, exist_ok=True)
+                            # Создаем файл расходов
+                            expenses_file = f"{folder_path}/expenses.csv"
+                            with open(expenses_file, 'w', newline='', encoding='utf-8') as f:
+                                fieldnames = ['id', 'amount', 'description', 'category', 'transaction_date']
+                                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                                writer.writeheader()
+                            logger.info(f"Создана папка и файл расходов для пользователя {user_id}")
+                    except Exception as e:
+                        logger.error(f"Ошибка при создании папки для пользователя {user_id}: {e}")
+                        return False
+                    
+                expenses_file = f"{folder_path}/expenses.csv"
                 
-            expenses_file = f"{folder_path}/expenses.csv"
-            
-            # Читаем существующие расходы
-            expenses = []
-            if os.path.exists(expenses_file):
-                with open(expenses_file, 'r', encoding='utf-8') as f:
-                    reader = csv.DictReader(f)
-                    expenses = list(reader)
-            
-            # Генерируем новый ID
-            new_id = max([int(exp.get('id', 0)) for exp in expenses], default=0) + 1
-            
-            # Добавляем новый расход
-            new_expense = {
-                'id': str(new_id),
-                'amount': str(amount),
-                'description': description,
-                'category': category,
-                'transaction_date': transaction_date.isoformat()
-            }
-            expenses.append(new_expense)
-            
-            # Записываем обратно в файл
-            with open(expenses_file, 'w', newline='', encoding='utf-8') as f:
-                fieldnames = ['id', 'amount', 'description', 'category', 'transaction_date']
-                writer = csv.DictWriter(f, fieldnames=fieldnames)
-                writer.writeheader()
-                writer.writerows(expenses)
-            
-            logger.info(f"Расход успешно добавлен в файл {expenses_file}")
-            return True
-        except Exception as e:
-            logger.error(f"Ошибка при добавлении расхода в файл для пользователя {user_id}: {e}")
-            logger.error(f"Папка: {folder_path}, файл: {expenses_file}")
-            return False
+                # Читаем существующие расходы
+                expenses = []
+                if os.path.exists(expenses_file):
+                    with open(expenses_file, 'r', encoding='utf-8') as f:
+                        reader = csv.DictReader(f)
+                        expenses = list(reader)
+                
+                # Генерируем новый ID
+                new_id = max([int(exp.get('id', 0)) for exp in expenses], default=0) + 1
+                
+                # Добавляем новый расход
+                new_expense = {
+                    'id': str(new_id),
+                    'amount': str(amount),
+                    'description': description,
+                    'category': category,
+                    'transaction_date': transaction_date.isoformat()
+                }
+                expenses.append(new_expense)
+                
+                # Записываем обратно в файл
+                with open(expenses_file, 'w', newline='', encoding='utf-8') as f:
+                    fieldnames = ['id', 'amount', 'description', 'category', 'transaction_date']
+                    writer = csv.DictWriter(f, fieldnames=fieldnames)
+                    writer.writeheader()
+                    writer.writerows(expenses)
+                
+                logger.info(f"Расход успешно добавлен в файл {expenses_file}")
+                return True
+            except Exception as e:
+                logger.error(f"Ошибка при добавлении расхода в файл для пользователя {user_id}: {e}")
+                return False
     else:
         # Fallback к базе данных для совместимости
         conn = get_db_connection()
@@ -1872,33 +1898,62 @@ async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         await update.message.reply_text("Не могу распознать период.", reply_markup=get_main_menu_keyboard())
         return ConversationHandler.END
 
-    conn = get_db_connection()
-    if not conn:
-        await update.message.reply_text("Проблема с подключением к базе данных.", reply_markup=get_main_menu_keyboard())
-        return ConversationHandler.END
+    user_id = update.effective_user.id
+    
+    # Проверяем, является ли пользователь "старым" (использует PostgreSQL)
+    if is_legacy_user(user_id):
+        logger.info(f"Пользователь {user_id} - старый, используем PostgreSQL для отчета")
+        # Используем PostgreSQL для старых пользователей
+        conn = get_db_connection()
+        if not conn:
+            await update.message.reply_text("Проблема с подключением к базе данных.", reply_markup=get_main_menu_keyboard())
+            return ConversationHandler.END
 
-    try:
-        user_id = update.effective_user.id
-        folder_path = get_user_folder_path(user_id)
-        expenses_file = f"{folder_path}/expenses.csv"
-        
-        data = []
-        if os.path.exists(expenses_file):
-            import csv
-            with open(expenses_file, 'r', encoding='utf-8') as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    transaction_date = datetime.fromisoformat(row['transaction_date'].replace('Z', '+00:00'))
-                    if start_date <= transaction_date.date() <= end_date:
-                        data.append((
-                            row['description'],
-                            row['category'],
-                            float(row['amount']),
-                            transaction_date
-                        ))
-    except Exception as e:
-        await update.message.reply_text(f"Произошла ошибка при получении отчета: {e}", reply_markup=get_main_menu_keyboard())
-        return ConversationHandler.END
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT description, category, amount, transaction_date
+                FROM expenses
+                WHERE DATE(transaction_date) >= %s AND DATE(transaction_date) <= %s
+                ORDER BY transaction_date DESC
+            ''', (start_date, end_date))
+            
+            data = []
+            for row in cursor.fetchall():
+                description, category, amount, transaction_date = row
+                data.append((
+                    description,
+                    category,
+                    float(amount),
+                    transaction_date
+                ))
+            conn.close()
+        except Exception as e:
+            await update.message.reply_text(f"Произошла ошибка при получении отчета из PostgreSQL: {e}", reply_markup=get_main_menu_keyboard())
+            return ConversationHandler.END
+    else:
+        # Используем файлы для новых пользователей
+        try:
+            folder_path = get_user_folder_path(user_id)
+            expenses_file = f"{folder_path}/expenses.csv"
+            
+            data = []
+            if os.path.exists(expenses_file):
+                import csv
+                with open(expenses_file, 'r', encoding='utf-8') as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        transaction_date = datetime.fromisoformat(row['transaction_date'].replace('Z', '+00:00'))
+                        if start_date <= transaction_date.date() <= end_date:
+                            data.append((
+                                row['description'],
+                                row['category'],
+                                float(row['amount']),
+                                transaction_date
+                            ))
+        except Exception as e:
+            await update.message.reply_text(f"Произошла ошибка при получении отчета из файлов: {e}", reply_markup=get_main_menu_keyboard())
+            return ConversationHandler.END
 
     if not data:
         await update.message.reply_text("За выбранный период нет расходов.", reply_markup=get_main_menu_keyboard())
@@ -2883,41 +2938,66 @@ def main():
 # --- Функции планирования бюджета ---
 def upsert_budget_plan(plan_month: date, total_amount: float, user_id: int = None) -> int | None:
 	if user_id:
-		# Работаем с файлами пользователя
-		try:
-			plans = get_user_budget_plans(user_id)
-			
-			# Ищем существующий план на этот месяц
-			plan_id = None
-			for i, plan in enumerate(plans):
-				if plan.get('plan_month') == plan_month.isoformat():
-					# Обновляем существующий план
-					plans[i]['total_amount'] = total_amount
-					plan_id = plan.get('id', i + 1)
-					break
-			
-			if plan_id is None:
-				# Создаем новый план
-				plan_id = len(plans) + 1
-				new_plan = {
-					'id': plan_id,
-					'plan_month': plan_month.isoformat(),
-					'total_amount': total_amount,
-					'items': [],
-					'created_at': datetime.now().isoformat()
-				}
-				plans.append(new_plan)
-			
-			# Сохраняем планы обратно в файл
-			folder_path = get_user_folder_path(user_id)
-			budget_plans_file = f"{folder_path}/budget_plans.json"
-			with open(budget_plans_file, 'w', encoding='utf-8') as f:
-				json.dump(plans, f, ensure_ascii=False, indent=2)
-			
-			return plan_id
-		except Exception as e:
-			logger.error(f"Ошибка при сохранении плана бюджета пользователя {user_id}: {e}")
-			return None
+		# Проверяем, является ли пользователь "старым" (использует PostgreSQL)
+		if is_legacy_user(user_id):
+			logger.info(f"Пользователь {user_id} - старый, используем PostgreSQL для планирования")
+			# Используем PostgreSQL для старых пользователей
+			conn = get_db_connection()
+			if not conn:
+				return None
+			try:
+				cursor = conn.cursor()
+				cursor.execute('''
+					INSERT INTO budget_plans (plan_month, total_amount)
+					VALUES (%s, %s)
+					ON CONFLICT (plan_month)
+					DO UPDATE SET total_amount = EXCLUDED.total_amount
+					RETURNING id
+				''', (plan_month, total_amount))
+				plan_id = cursor.fetchone()[0]
+				conn.commit()
+				return plan_id
+			except Exception as e:
+				logger.error(f"Ошибка при сохранении бюджета в PostgreSQL для пользователя {user_id}: {e}")
+				return None
+			finally:
+				conn.close()
+		else:
+			# Работаем с файлами для новых пользователей
+			try:
+				plans = get_user_budget_plans(user_id)
+				
+				# Ищем существующий план на этот месяц
+				plan_id = None
+				for i, plan in enumerate(plans):
+					if plan.get('plan_month') == plan_month.isoformat():
+						# Обновляем существующий план
+						plans[i]['total_amount'] = total_amount
+						plan_id = plan.get('id', i + 1)
+						break
+				
+				if plan_id is None:
+					# Создаем новый план
+					plan_id = len(plans) + 1
+					new_plan = {
+						'id': plan_id,
+						'plan_month': plan_month.isoformat(),
+						'total_amount': total_amount,
+						'items': [],
+						'created_at': datetime.now().isoformat()
+					}
+					plans.append(new_plan)
+				
+				# Сохраняем планы обратно в файл
+				folder_path = get_user_folder_path(user_id)
+				budget_plans_file = f"{folder_path}/budget_plans.json"
+				with open(budget_plans_file, 'w', encoding='utf-8') as f:
+					json.dump(plans, f, ensure_ascii=False, indent=2)
+				
+				return plan_id
+			except Exception as e:
+				logger.error(f"Ошибка при сохранении плана бюджета пользователя {user_id}: {e}")
+				return None
 	else:
 		# Fallback к базе данных
 		conn = get_db_connection()
@@ -2944,37 +3024,58 @@ def upsert_budget_plan(plan_month: date, total_amount: float, user_id: int = Non
 
 def add_budget_item(plan_id: int, category: str, amount: float, comment: str | None, user_id: int = None) -> bool:
 	if user_id:
-		# Работаем с файлами пользователя
-		try:
-			plans = get_user_budget_plans(user_id)
-			
-			# Находим план с нужным ID
-			for plan in plans:
-				if plan.get('id') == plan_id:
-					# Добавляем статью в план
-					if 'items' not in plan:
-						plan['items'] = []
-					
-					new_item = {
-						'id': len(plan['items']) + 1,
-						'category': category,
-						'amount': amount,
-						'comment': comment,
-						'created_at': datetime.now().isoformat()
-					}
-					plan['items'].append(new_item)
-					break
-			
-			# Сохраняем планы обратно в файл
-			folder_path = get_user_folder_path(user_id)
-			budget_plans_file = f"{folder_path}/budget_plans.json"
-			with open(budget_plans_file, 'w', encoding='utf-8') as f:
-				json.dump(plans, f, ensure_ascii=False, indent=2)
-			
-			return True
-		except Exception as e:
-			logger.error(f"Ошибка при добавлении статьи бюджета пользователя {user_id}: {e}")
-			return False
+		# Проверяем, является ли пользователь "старым" (использует PostgreSQL)
+		if is_legacy_user(user_id):
+			logger.info(f"Пользователь {user_id} - старый, используем PostgreSQL для добавления статьи бюджета")
+			# Используем PostgreSQL для старых пользователей
+			conn = get_db_connection()
+			if not conn:
+				return False
+			try:
+				cursor = conn.cursor()
+				cursor.execute('''
+					INSERT INTO budget_plan_items (plan_id, category, amount, comment)
+					VALUES (%s, %s, %s, %s)
+				''', (plan_id, category, amount, comment))
+				conn.commit()
+				return True
+			except Exception as e:
+				logger.error(f"Ошибка при добавлении статьи бюджета в PostgreSQL для пользователя {user_id}: {e}")
+				return False
+			finally:
+				conn.close()
+		else:
+			# Работаем с файлами для новых пользователей
+			try:
+				plans = get_user_budget_plans(user_id)
+				
+				# Находим план с нужным ID
+				for plan in plans:
+					if plan.get('id') == plan_id:
+						# Добавляем статью в план
+						if 'items' not in plan:
+							plan['items'] = []
+						
+						new_item = {
+							'id': len(plan['items']) + 1,
+							'category': category,
+							'amount': amount,
+							'comment': comment,
+							'created_at': datetime.now().isoformat()
+						}
+						plan['items'].append(new_item)
+						break
+				
+				# Сохраняем планы обратно в файл
+				folder_path = get_user_folder_path(user_id)
+				budget_plans_file = f"{folder_path}/budget_plans.json"
+				with open(budget_plans_file, 'w', encoding='utf-8') as f:
+					json.dump(plans, f, ensure_ascii=False, indent=2)
+				
+				return True
+			except Exception as e:
+				logger.error(f"Ошибка при добавлении статьи бюджета пользователя {user_id}: {e}")
+				return False
 	else:
 		# Fallback к базе данных
 		conn = get_db_connection()
@@ -2997,31 +3098,56 @@ def add_budget_item(plan_id: int, category: str, amount: float, comment: str | N
 
 def get_budget_plan(plan_month: date, user_id: int = None):
 	if user_id:
-		# Работаем с файлами пользователя
-		try:
-			plans = get_user_budget_plans(user_id)
-			
-			# Ищем план на нужный месяц
-			for plan in plans:
-				if plan.get('plan_month') == plan_month.isoformat():
-					items = plan.get('items', [])
-					# Конвертируем в формат, совместимый с БД
-					items_list = []
-					for item in items:
-						items_list.append((
-							item.get('category', ''),
-							item.get('amount', 0),
-							item.get('comment', '')
-						))
-					return {
-						'id': plan.get('id'),
-						'total_amount': plan.get('total_amount', 0)
-					}, items_list
-			
-			return None, []
-		except Exception as e:
-			logger.error(f"Ошибка при получении плана бюджета пользователя {user_id}: {e}")
-			return None, []
+		# Проверяем, является ли пользователь "старым" (использует PostgreSQL)
+		if is_legacy_user(user_id):
+			logger.info(f"Пользователь {user_id} - старый, используем PostgreSQL для получения плана бюджета")
+			# Используем PostgreSQL для старых пользователей
+			conn = get_db_connection()
+			if not conn:
+				return None, []
+			try:
+				cursor = conn.cursor()
+				cursor.execute('SELECT id, total_amount FROM budget_plans WHERE plan_month = %s', (plan_month,))
+				row = cursor.fetchone()
+				plan = None
+				if row:
+					plan = { 'id': row[0], 'total_amount': float(row[1]) }
+					cursor.execute('SELECT category, amount, comment FROM budget_plan_items WHERE plan_id = %s ORDER BY id', (row[0],))
+					items = cursor.fetchall()
+				else:
+					items = []
+				return plan, items
+			except Exception as e:
+				logger.error(f"Ошибка при получении плана бюджета из PostgreSQL для пользователя {user_id}: {e}")
+				return None, []
+			finally:
+				conn.close()
+		else:
+			# Работаем с файлами для новых пользователей
+			try:
+				plans = get_user_budget_plans(user_id)
+				
+				# Ищем план на нужный месяц
+				for plan in plans:
+					if plan.get('plan_month') == plan_month.isoformat():
+						items = plan.get('items', [])
+						# Конвертируем в формат, совместимый с БД
+						items_list = []
+						for item in items:
+							items_list.append((
+								item.get('category', ''),
+								item.get('amount', 0),
+								item.get('comment', '')
+							))
+						return {
+							'id': plan.get('id'),
+							'total_amount': plan.get('total_amount', 0)
+						}, items_list
+				
+				return None, []
+			except Exception as e:
+				logger.error(f"Ошибка при получении плана бюджета пользователя {user_id}: {e}")
+				return None, []
 	else:
 		# Fallback к базе данных
 		conn = get_db_connection()
@@ -3207,34 +3333,70 @@ async def planning_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     elif text == "➕ Добавить планирование":
         return await planning_start(update, context)
     elif text == "📋 Список планов":
-        # Покажем краткий список месяцев с суммами из файлов пользователя
         user_id = update.effective_user.id
-        plans = get_user_budget_plans(user_id)
         
-        if not plans:
-            await update.message.reply_text("Планы пока отсутствуют.", reply_markup=get_main_menu_keyboard())
-            return ConversationHandler.END
-        
-        # Сортируем планы по дате (новые сначала)
-        plans.sort(key=lambda x: x.get('plan_month', ''), reverse=True)
-        
-        text_lines = ["📋 Последние планы:"]
-        kb = []
-        for i, plan in enumerate(plans[:12], 1):  # Показываем последние 12 планов
-            plan_month = datetime.fromisoformat(plan['plan_month']).date()
-            total = plan.get('total_amount', 0)
-            label = f"{plan_month.strftime('%m.%Y')} — {float(total):.0f}"
-            text_lines.append(f"{i}. {label}")
-            kb.append([KeyboardButton(label)])
-        
-        # Добавляем кнопки управления
-        kb.append([KeyboardButton("🗑️ Удалить план")])
-        kb.append([KeyboardButton("🔙 Назад")])
-        
-        await update.message.reply_text("\n".join(text_lines), reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
-        # Сохраняем планы в контексте для последующего выбора
-        context.user_data['plans_list'] = plans
-        return PLAN_MENU_STATE
+        # Проверяем, является ли пользователь "старым" (использует PostgreSQL)
+        if is_legacy_user(user_id):
+            logger.info(f"Пользователь {user_id} - старый, используем PostgreSQL для списка планов")
+            # Используем PostgreSQL для старых пользователей
+            conn = get_db_connection()
+            if not conn:
+                await update.message.reply_text("Не удалось подключиться к БД.", reply_markup=get_main_menu_keyboard())
+                return ConversationHandler.END
+            try:
+                cursor = conn.cursor()
+                cursor.execute('SELECT plan_month, total_amount, id FROM budget_plans ORDER BY plan_month DESC LIMIT 12')
+                rows = cursor.fetchall()
+            finally:
+                conn.close()
+            
+            if not rows:
+                await update.message.reply_text("Планы пока отсутствуют.", reply_markup=get_main_menu_keyboard())
+                return ConversationHandler.END
+            
+            text_lines = ["📋 Последние планы:"]
+            kb = []
+            for i, (pm, total, pid) in enumerate(rows, 1):
+                label = f"{pm.strftime('%m.%Y')} — {float(total):.0f}"
+                text_lines.append(f"{i}. {label}")
+                kb.append([KeyboardButton(label)])
+            
+            # Добавляем кнопки управления
+            kb.append([KeyboardButton("🗑️ Удалить план")])
+            kb.append([KeyboardButton("🔙 Назад")])
+            
+            await update.message.reply_text("\n".join(text_lines), reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
+            # Сохраняем планы в контексте для последующего выбора
+            context.user_data['plans_list'] = rows
+            return PLAN_MENU_STATE
+        else:
+            # Используем файлы для новых пользователей
+            plans = get_user_budget_plans(user_id)
+            
+            if not plans:
+                await update.message.reply_text("Планы пока отсутствуют.", reply_markup=get_main_menu_keyboard())
+                return ConversationHandler.END
+            
+            # Сортируем планы по дате (новые сначала)
+            plans.sort(key=lambda x: x.get('plan_month', ''), reverse=True)
+            
+            text_lines = ["📋 Последние планы:"]
+            kb = []
+            for i, plan in enumerate(plans[:12], 1):  # Показываем последние 12 планов
+                plan_month = datetime.fromisoformat(plan['plan_month']).date()
+                total = plan.get('total_amount', 0)
+                label = f"{plan_month.strftime('%m.%Y')} — {float(total):.0f}"
+                text_lines.append(f"{i}. {label}")
+                kb.append([KeyboardButton(label)])
+            
+            # Добавляем кнопки управления
+            kb.append([KeyboardButton("🗑️ Удалить план")])
+            kb.append([KeyboardButton("🔙 Назад")])
+            
+            await update.message.reply_text("\n".join(text_lines), reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
+            # Сохраняем планы в контексте для последующего выбора
+            context.user_data['plans_list'] = plans
+            return PLAN_MENU_STATE
     
     elif text == "🗑️ Удалить план":
         return await planning_delete_start(update, context)
@@ -3440,7 +3602,7 @@ async def show_detailed_plan(update: Update, context: ContextTypes.DEFAULT_TYPE,
         month, year = month_part.split(".")
         plan_date = datetime.strptime(f"01.{month}.{year}", "%d.%m.%Y").date()
         
-        # Получаем план из файлов пользователя
+        # Получаем план из файлов пользователя или PostgreSQL
         user_id = update.effective_user.id
         plan, items = get_budget_plan(plan_date, user_id)
         
