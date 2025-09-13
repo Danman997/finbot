@@ -2841,24 +2841,33 @@ def ensure_tables_exist():
     try:
         conn = get_db_connection()
         if not conn:
+            logger.error("Не удалось подключиться к БД для создания таблиц")
             return False
         
         cursor = conn.cursor()
         
         # Проверяем, существует ли таблица users
-        cursor.execute("""
-            SELECT EXISTS (
-                SELECT FROM information_schema.tables 
-                WHERE table_name = 'users'
-            );
-        """)
-        
-        users_exists = cursor.fetchone()[0]
+        try:
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables 
+                    WHERE table_name = 'users'
+                );
+            """)
+            
+            users_exists = cursor.fetchone()[0]
+            logger.info(f"Таблица users существует: {users_exists}")
+            
+        except Exception as e:
+            logger.error(f"Ошибка проверки существования таблицы users: {e}")
+            users_exists = False
         
         if not users_exists:
-            logger.info("Таблица users не существует, создаем таблицы...")
-            # Создаем основные таблицы вручную
-            create_tables_sql = """
+            logger.info("Таблица users не существует, создаем все таблицы...")
+            
+            # Создаем таблицы по одной
+            tables_sql = [
+                """
                 CREATE TABLE IF NOT EXISTS users (
                     id SERIAL PRIMARY KEY,
                     telegram_id BIGINT UNIQUE NOT NULL,
@@ -2869,7 +2878,8 @@ def ensure_tables_exist():
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     is_active BOOLEAN DEFAULT TRUE
                 );
-                
+                """,
+                """
                 CREATE TABLE IF NOT EXISTS user_categories (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -2880,7 +2890,8 @@ def ensure_tables_exist():
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(user_id, category_name)
                 );
-                
+                """,
+                """
                 CREATE TABLE IF NOT EXISTS expenses (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -2891,7 +2902,8 @@ def ensure_tables_exist():
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
-                
+                """,
+                """
                 CREATE TABLE IF NOT EXISTS budget_plans (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -2905,7 +2917,8 @@ def ensure_tables_exist():
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
-                
+                """,
+                """
                 CREATE TABLE IF NOT EXISTS reminders (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -2919,7 +2932,8 @@ def ensure_tables_exist():
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
-                
+                """,
+                """
                 CREATE TABLE IF NOT EXISTS user_settings (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -2929,19 +2943,26 @@ def ensure_tables_exist():
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(user_id, setting_key)
                 );
-            """
+                """
+            ]
             
-            cursor.execute(create_tables_sql)
+            for i, table_sql in enumerate(tables_sql):
+                try:
+                    cursor.execute(table_sql)
+                    logger.info(f"Таблица {i+1}/6 создана успешно")
+                except Exception as e:
+                    logger.error(f"Ошибка создания таблицы {i+1}: {e}")
+            
             conn.commit()
-            logger.info("Основные таблицы созданы успешно")
+            logger.info("✅ Все таблицы созданы успешно")
         else:
-            logger.info("Таблицы уже существуют")
+            logger.info("✅ Таблицы уже существуют")
         
         conn.close()
         return True
         
     except Exception as e:
-        logger.error(f"Ошибка создания таблиц: {e}")
+        logger.error(f"❌ Ошибка создания таблиц: {e}")
         return False
 
 def migrate_existing_data():
@@ -2962,8 +2983,15 @@ def migrate_existing_data():
 def main():
     train_model(TRAINING_DATA)
     init_db()  # Старая инициализация для совместимости
+    
+    # Принудительно создаем таблицы новой архитектуры
+    logger.info("Инициализация новой архитектуры БД...")
+    if ensure_tables_exist():
+        logger.info("✅ Таблицы новой архитектуры созданы")
+    else:
+        logger.error("❌ Ошибка создания таблиц новой архитектуры")
+    
     init_new_database_schema()  # Новая схема БД
-    ensure_tables_exist()  # Проверка и создание таблиц
     migrate_existing_data()  # Миграция данных
     application = Application.builder().token(BOT_TOKEN).build()
 
