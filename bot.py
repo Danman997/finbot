@@ -54,9 +54,20 @@ if not BOT_TOKEN:
     logger.error("Ошибка: Токен бота не найден. Установите переменную окружения BOT_TOKEN.")
     exit()
 
-DATABASE_URL = os.environ.get('DATABASE_URL')
-if not DATABASE_URL:
-    logger.error("Ошибка: URL базы данных не найден. Установите переменную окружения DATABASE_URL.")
+# Получаем параметры подключения к БД из переменных окружения Railway
+DATABASE_HOST = os.environ.get('DATABASE_HOST')
+DATABASE_PORT = os.environ.get('DATABASE_PORT', '5432')
+DATABASE_NAME = os.environ.get('DATABASE_NAME')
+DATABASE_USER = os.environ.get('DATABASE_USER')
+DATABASE_PASSWORD = os.environ.get('DATABASE_PASSWORD')
+
+# Формируем DATABASE_URL для совместимости
+if all([DATABASE_HOST, DATABASE_NAME, DATABASE_USER, DATABASE_PASSWORD]):
+    DATABASE_URL = f"postgresql://{DATABASE_USER}:{DATABASE_PASSWORD}@{DATABASE_HOST}:{DATABASE_PORT}/{DATABASE_NAME}"
+    logger.info("✅ Параметры подключения к БД настроены")
+else:
+    DATABASE_URL = None
+    logger.warning("⚠️ Не все параметры подключения к БД настроены")
     exit()
     
 # --- Классификация расходов: гибридный подход (словарь → фуззи → ML) ---
@@ -375,8 +386,12 @@ def classify_expense(description: str, user_id: int = None) -> str:
 # --- Функции для работы с базой данных ---
 def get_db_connection():
     try:
-        conn = psycopg2.connect(DATABASE_URL)
-        return conn
+        if DATABASE_URL:
+            conn = psycopg2.connect(DATABASE_URL)
+            return conn
+        else:
+            logger.error("DATABASE_URL не настроен")
+            return None
     except Exception as e:
         logger.error(f"Ошибка подключения к БД: {e}")
         return None
