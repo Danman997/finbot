@@ -103,6 +103,28 @@ def create_user(telegram_id: int, username: str = None, folder_name: str = None,
     if not db_manager.is_available():
         return False
     
+    # Принудительно создаем таблицу users если её нет
+    try:
+        conn = db_manager.get_connection()
+        if conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id SERIAL PRIMARY KEY,
+                    telegram_id BIGINT UNIQUE NOT NULL,
+                    username VARCHAR(255),
+                    folder_name VARCHAR(255),
+                    role VARCHAR(50) DEFAULT 'user',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    is_active BOOLEAN DEFAULT TRUE
+                );
+            """)
+            conn.commit()
+            logger.info("✅ Таблица users создана/проверена в create_user")
+    except Exception as e:
+        logger.error(f"Ошибка создания таблицы users в create_user: {e}")
+    
     try:
         query = """
             INSERT INTO users (telegram_id, username, folder_name, role)
@@ -135,6 +157,28 @@ def get_all_users() -> List[Dict]:
 
 def create_default_categories(user_id: int) -> bool:
     """Создание стандартных категорий для пользователя"""
+    # Создаем таблицу user_categories если её нет
+    try:
+        conn = db_manager.get_connection()
+        if conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS user_categories (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                    category_name VARCHAR(255) NOT NULL,
+                    category_type VARCHAR(50) DEFAULT 'expense',
+                    color VARCHAR(7) DEFAULT '#3498db',
+                    icon VARCHAR(50),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(user_id, category_name)
+                );
+            """)
+            conn.commit()
+            logger.info("✅ Таблица user_categories создана/проверена")
+    except Exception as e:
+        logger.error(f"Ошибка создания таблицы user_categories: {e}")
+    
     default_categories = [
         ("Продукты", "expense", "#e74c3c", "🛒"),
         ("Транспорт", "expense", "#3498db", "🚗"),
@@ -190,6 +234,28 @@ def add_expense(user_id: int, category_id: int, amount: float, description: str 
     """Добавление расхода"""
     if expense_date is None:
         expense_date = date.today()
+    
+    # Создаем таблицу expenses если её нет
+    try:
+        conn = db_manager.get_connection()
+        if conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS expenses (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                    category_id INTEGER REFERENCES user_categories(id) ON DELETE SET NULL,
+                    amount DECIMAL(10,2) NOT NULL,
+                    description TEXT,
+                    date DATE NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            conn.commit()
+            logger.info("✅ Таблица expenses создана/проверена")
+    except Exception as e:
+        logger.error(f"Ошибка создания таблицы expenses: {e}")
     
     try:
         query = """
