@@ -2893,7 +2893,7 @@ def main():
             PLAN_CATEGORY_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_category)],
             PLAN_AMOUNT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_amount)],
             PLAN_COMMENT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, planning_comment)],
-            PLAN_DELETE_STATE: [MessageHandler(filters.Regex("^(❌ Удалить план \d+|🔙 Назад)$"), planning_delete_confirm)],
+            PLAN_DELETE_STATE: [MessageHandler(filters.Regex(r"^(❌ Удалить план \d+|🔙 Назад)$"), planning_delete_confirm)],
             CUSTOM_CATEGORY_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, custom_category_input)],
         },
         fallbacks=[CommandHandler("start", start)],
@@ -2908,7 +2908,7 @@ def main():
                 MessageHandler(filters.Regex("^(📊 Сравнение с планом|🔙 Назад)$"), analytics_month_choice)
             ],
             ANALYTICS_MONTH_STATE: [
-                MessageHandler(filters.Regex("^.*\d{4}$"), analytics_month_selected),
+                MessageHandler(filters.Regex(r"^.*\d{4}$"), analytics_month_selected),
                 MessageHandler(filters.Regex("^🔙 Назад$"), analytics_month_selected)
             ]
         },
@@ -2959,7 +2959,7 @@ def main():
             REMINDER_AMOUNT_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_amount_input)],
             REMINDER_START_DATE_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_start_date_input)],
             REMINDER_END_DATE_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_end_date_input)],
-            REMINDER_DELETE_STATE: [MessageHandler(filters.Regex("^(❌ Удалить \d+|🔙 Назад)$"), reminder_delete_confirm)],
+            REMINDER_DELETE_STATE: [MessageHandler(filters.Regex(r"^(❌ Удалить \d+|🔙 Назад)$"), reminder_delete_confirm)],
         },
         fallbacks=[CommandHandler("start", start)],
         allow_reentry=True

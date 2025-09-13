@@ -21,30 +21,45 @@ class DatabaseManager:
     def __init__(self):
         """Инициализация подключения к базе данных"""
         self.connection = None
-        self.connect()
+        # Не подключаемся сразу, чтобы не падать при импорте
+        # self.connect()
     
     def connect(self):
         """Установка соединения с базой данных"""
         try:
+            # Проверяем наличие переменных окружения
+            required_vars = ['DATABASE_HOST', 'DATABASE_NAME', 'DATABASE_USER', 'DATABASE_PASSWORD']
+            missing_vars = [var for var in required_vars if not os.getenv(var)]
+            
+            if missing_vars:
+                logger.warning(f"Отсутствуют переменные окружения: {missing_vars}")
+                logger.warning("База данных недоступна, работаем в режиме совместимости")
+                return None
+            
             # Получаем параметры подключения из переменных окружения
             self.connection = psycopg2.connect(
-                host=os.getenv('DATABASE_HOST', 'localhost'),
+                host=os.getenv('DATABASE_HOST'),
                 port=os.getenv('DATABASE_PORT', '5432'),
-                database=os.getenv('DATABASE_NAME', 'finbot_db'),
-                user=os.getenv('DATABASE_USER', 'postgres'),
-                password=os.getenv('DATABASE_PASSWORD', ''),
+                database=os.getenv('DATABASE_NAME'),
+                user=os.getenv('DATABASE_USER'),
+                password=os.getenv('DATABASE_PASSWORD'),
                 cursor_factory=RealDictCursor
             )
             logger.info("Успешное подключение к базе данных")
         except Exception as e:
             logger.error(f"Ошибка подключения к базе данных: {e}")
-            raise
+            logger.warning("Продолжаем работу без базы данных")
+            return None
     
     def get_connection(self):
         """Получение соединения с базой данных"""
         if self.connection is None or self.connection.closed:
             self.connect()
         return self.connection
+    
+    def is_available(self):
+        """Проверка доступности базы данных"""
+        return self.get_connection() is not None
     
     def execute_query(self, query: str, params: tuple = None, fetch: bool = False) -> Optional[List[Dict]]:
         """Выполнение SQL запроса"""
@@ -73,6 +88,9 @@ db_manager = DatabaseManager()
 
 def get_user_by_telegram_id(telegram_id: int) -> Optional[Dict]:
     """Получение пользователя по Telegram ID"""
+    if not db_manager.is_available():
+        return None
+    
     query = """
         SELECT * FROM users 
         WHERE telegram_id = %s AND is_active = TRUE
@@ -82,6 +100,9 @@ def get_user_by_telegram_id(telegram_id: int) -> Optional[Dict]:
 
 def create_user(telegram_id: int, username: str = None, folder_name: str = None, role: str = "user") -> bool:
     """Создание нового пользователя"""
+    if not db_manager.is_available():
+        return False
+    
     try:
         query = """
             INSERT INTO users (telegram_id, username, folder_name, role)
