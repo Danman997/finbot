@@ -384,6 +384,11 @@ def get_db_connection():
 def init_new_database_schema():
     """Инициализация новой схемы базы данных"""
     try:
+        # Проверяем, есть ли файл схемы
+        if not os.path.exists('database_schema.sql'):
+            logger.error("Файл database_schema.sql не найден")
+            return False
+        
         # Читаем SQL файл со схемой
         with open('database_schema.sql', 'r', encoding='utf-8') as f:
             schema_sql = f.read()
@@ -391,7 +396,18 @@ def init_new_database_schema():
         conn = get_db_connection()
         if conn:
             cursor = conn.cursor()
-            cursor.execute(schema_sql)
+            # Выполняем SQL по частям (разделяем по ;)
+            sql_commands = [cmd.strip() for cmd in schema_sql.split(';') if cmd.strip()]
+            
+            for sql_command in sql_commands:
+                if sql_command:
+                    try:
+                        cursor.execute(sql_command)
+                        logger.info(f"Выполнена команда: {sql_command[:50]}...")
+                    except Exception as e:
+                        logger.error(f"Ошибка выполнения команды: {e}")
+                        logger.error(f"Команда: {sql_command}")
+            
             conn.commit()
             conn.close()
             logger.info("Новая схема базы данных инициализирована")
@@ -2820,6 +2836,114 @@ async def create_analytics_chart(update: Update, context: ContextTypes.DEFAULT_T
         
 
 
+def ensure_tables_exist():
+    """Проверяет и создает таблицы, если их нет"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return False
+        
+        cursor = conn.cursor()
+        
+        # Проверяем, существует ли таблица users
+        cursor.execute("""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_name = 'users'
+            );
+        """)
+        
+        users_exists = cursor.fetchone()[0]
+        
+        if not users_exists:
+            logger.info("Таблица users не существует, создаем таблицы...")
+            # Создаем основные таблицы вручную
+            create_tables_sql = """
+                CREATE TABLE IF NOT EXISTS users (
+                    id SERIAL PRIMARY KEY,
+                    telegram_id BIGINT UNIQUE NOT NULL,
+                    username VARCHAR(255),
+                    folder_name VARCHAR(255),
+                    role VARCHAR(50) DEFAULT 'user',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    is_active BOOLEAN DEFAULT TRUE
+                );
+                
+                CREATE TABLE IF NOT EXISTS user_categories (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                    category_name VARCHAR(255) NOT NULL,
+                    category_type VARCHAR(50) DEFAULT 'expense',
+                    color VARCHAR(7) DEFAULT '#3498db',
+                    icon VARCHAR(50),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(user_id, category_name)
+                );
+                
+                CREATE TABLE IF NOT EXISTS expenses (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                    category_id INTEGER REFERENCES user_categories(id) ON DELETE SET NULL,
+                    amount DECIMAL(10,2) NOT NULL,
+                    description TEXT,
+                    date DATE NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                
+                CREATE TABLE IF NOT EXISTS budget_plans (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                    plan_name VARCHAR(255) NOT NULL,
+                    total_amount DECIMAL(10,2) NOT NULL,
+                    spent_amount DECIMAL(10,2) DEFAULT 0.00,
+                    start_date DATE NOT NULL,
+                    end_date DATE NOT NULL,
+                    categories JSONB,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                
+                CREATE TABLE IF NOT EXISTS reminders (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                    title VARCHAR(255) NOT NULL,
+                    description TEXT,
+                    reminder_date DATE NOT NULL,
+                    reminder_time TIME,
+                    is_recurring BOOLEAN DEFAULT FALSE,
+                    recurring_pattern VARCHAR(50),
+                    is_completed BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                
+                CREATE TABLE IF NOT EXISTS user_settings (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                    setting_key VARCHAR(255) NOT NULL,
+                    setting_value TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(user_id, setting_key)
+                );
+            """
+            
+            cursor.execute(create_tables_sql)
+            conn.commit()
+            logger.info("Основные таблицы созданы успешно")
+        else:
+            logger.info("Таблицы уже существуют")
+        
+        conn.close()
+        return True
+        
+    except Exception as e:
+        logger.error(f"Ошибка создания таблиц: {e}")
+        return False
+
 def migrate_existing_data():
     """Автоматическая миграция существующих данных в новую схему БД"""
     try:
@@ -2839,6 +2963,7 @@ def main():
     train_model(TRAINING_DATA)
     init_db()  # Старая инициализация для совместимости
     init_new_database_schema()  # Новая схема БД
+    ensure_tables_exist()  # Проверка и создание таблиц
     migrate_existing_data()  # Миграция данных
     application = Application.builder().token(BOT_TOKEN).build()
 
