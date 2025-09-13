@@ -16,6 +16,9 @@ import json
 import secrets
 import string
 
+# Импорт модуля работы с базой данных
+from database import *
+
 # Настройки matplotlib для высокого качества
 plt.rcParams['figure.dpi'] = 300
 plt.rcParams['savefig.dpi'] = 300
@@ -255,55 +258,76 @@ def is_legacy_user(user_id: int) -> bool:
     return user_id in legacy_user_ids
 
 def get_user_categories(user_id: int) -> list:
-    """Получает категории пользователя из файла"""
+    """Получает категории пользователя из базы данных"""
     try:
-        folder_path = get_user_folder_path(user_id)
-        categories_file = f"{folder_path}/categories.json"
-        
-        if os.path.exists(categories_file):
-            with open(categories_file, 'r', encoding='utf-8') as f:
-                categories = json.load(f)
-            return categories
-        else:
-            # Fallback к глобальным категориям
+        user = get_user_by_telegram_id(user_id)
+        if not user:
             return []
+        
+        from database import get_user_categories as db_get_user_categories
+        categories = db_get_user_categories(user['id'])
+        return [
+            {
+                'name': cat['category_name'],
+                'type': cat['category_type'],
+                'color': cat['color'],
+                'icon': cat['icon']
+            }
+            for cat in categories
+        ]
     except Exception as e:
         logger.error(f"Ошибка при получении категорий пользователя {user_id}: {e}")
         return []
 
 def get_user_budget_plans(user_id: int) -> list:
-    """Получает планы бюджета пользователя из файла"""
+    """Получает планы бюджета пользователя из базы данных"""
     try:
-        folder_path = get_user_folder_path(user_id)
-        budget_plans_file = f"{folder_path}/budget_plans.json"
-        
-        if os.path.exists(budget_plans_file):
-            with open(budget_plans_file, 'r', encoding='utf-8') as f:
-                plans = json.load(f)
-            return plans
-        else:
+        user = get_user_by_telegram_id(user_id)
+        if not user:
             return []
+        
+        from database import get_user_budget_plans as db_get_user_budget_plans
+        plans = db_get_user_budget_plans(user['id'])
+        return [
+            {
+                'id': plan['id'],
+                'name': plan['plan_name'],
+                'total_amount': float(plan['total_amount']),
+                'spent_amount': float(plan['spent_amount']),
+                'start_date': plan['start_date'].strftime('%Y-%m-%d'),
+                'end_date': plan['end_date'].strftime('%Y-%m-%d'),
+                'categories': plan['categories'],
+                'is_active': plan['is_active']
+            }
+            for plan in plans
+        ]
     except Exception as e:
         logger.error(f"Ошибка при получении планов бюджета пользователя {user_id}: {e}")
         return []
 
 def save_user_budget_plan(user_id: int, plan_data: dict) -> bool:
-    """Сохраняет план бюджета пользователя в файл"""
+    """Сохраняет план бюджета пользователя в базу данных"""
     try:
-        folder_path = get_user_folder_path(user_id)
-        budget_plans_file = f"{folder_path}/budget_plans.json"
+        user = get_user_by_telegram_id(user_id)
+        if not user:
+            return False
         
-        # Читаем существующие планы
-        plans = get_user_budget_plans(user_id)
+        from datetime import datetime
+        from database import create_budget_plan
         
-        # Добавляем новый план
-        plans.append(plan_data)
+        start_date = datetime.strptime(plan_data['start_date'], '%Y-%m-%d').date()
+        end_date = datetime.strptime(plan_data['end_date'], '%Y-%m-%d').date()
         
-        # Сохраняем обратно в файл
-        with open(budget_plans_file, 'w', encoding='utf-8') as f:
-            json.dump(plans, f, ensure_ascii=False, indent=2)
+        success = create_budget_plan(
+            user['id'],
+            plan_data['name'],
+            plan_data['total_amount'],
+            start_date,
+            end_date,
+            plan_data.get('categories')
+        )
         
-        return True
+        return success
     except Exception as e:
         logger.error(f"Ошибка при сохранении плана бюджета пользователя {user_id}: {e}")
         return False
@@ -356,6 +380,26 @@ def get_db_connection():
     except Exception as e:
         logger.error(f"Ошибка подключения к БД: {e}")
         return None
+
+def init_new_database_schema():
+    """Инициализация новой схемы базы данных"""
+    try:
+        # Читаем SQL файл со схемой
+        with open('database_schema.sql', 'r', encoding='utf-8') as f:
+            schema_sql = f.read()
+        
+        conn = get_db_connection()
+        if conn:
+            cursor = conn.cursor()
+            cursor.execute(schema_sql)
+            conn.commit()
+            conn.close()
+            logger.info("Новая схема базы данных инициализирована")
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"Ошибка инициализации новой схемы БД: {e}")
+        return False
 
 def init_db():
     conn = get_db_connection()
@@ -523,7 +567,7 @@ def init_db():
         conn.close()
         logger.info("База данных инициализирована (все таблицы проверены/созданы).")
 
-def add_expense(amount, category, description, transaction_date, user_id=None):
+def add_expense_old(amount, category, description, transaction_date, user_id=None):
     if user_id:
         # Проверяем, является ли пользователь "старым" (использует PostgreSQL)
         if is_legacy_user(user_id):
@@ -631,6 +675,49 @@ def add_expense(amount, category, description, transaction_date, user_id=None):
             return False
         finally:
             conn.close()
+
+def add_expense(amount, category, description, transaction_date, user_id=None):
+    """Добавляет расход в базу данных (новая архитектура)"""
+    try:
+        # Убеждаемся, что пользователь существует в БД
+        if user_id:
+            user = get_user_by_telegram_id(user_id)
+            if not user:
+                # Создаем пользователя если его нет
+                create_user(user_id, f"user_{user_id}", f"user_{user_id}")
+                user = get_user_by_telegram_id(user_id)
+                if not user:
+                    logger.error(f"Не удалось создать пользователя {user_id}")
+                    return False
+        else:
+            logger.error("user_id не указан")
+            return False
+        
+        # Находим категорию по имени
+        categories = get_user_categories(user['id'])
+        category_id = None
+        for cat in categories:
+            if cat['category_name'] == category:
+                category_id = cat['id']
+                break
+        
+        if not category_id:
+            logger.error(f"Категория '{category}' не найдена для пользователя {user_id}")
+            return False
+        
+        # Добавляем расход в БД (используем функцию из database.py)
+        from database import add_expense as db_add_expense
+        success = db_add_expense(user['id'], category_id, amount, description, transaction_date)
+        if success:
+            logger.info(f"Расход успешно добавлен в БД для пользователя {user_id}")
+            return True
+        else:
+            logger.error(f"Ошибка добавления расхода в БД для пользователя {user_id}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Ошибка при добавлении расхода: {e}")
+        return False
 
 def get_expense_by_id(expense_id):
     """Получить расход по ID"""
@@ -2733,9 +2820,26 @@ async def create_analytics_chart(update: Update, context: ContextTypes.DEFAULT_T
         
 
 
+def migrate_existing_data():
+    """Автоматическая миграция существующих данных в новую схему БД"""
+    try:
+        # Проверяем, есть ли данные для миграции
+        import os
+        if os.path.exists('authorized_users.json'):
+            logger.info("Начинаем автоматическую миграцию данных...")
+            from migrate_to_database import migrate_all_users
+            migrate_all_users()
+            logger.info("Миграция данных завершена")
+        else:
+            logger.info("Нет данных для миграции")
+    except Exception as e:
+        logger.error(f"Ошибка миграции данных: {e}")
+
 def main():
     train_model(TRAINING_DATA)
-    init_db()
+    init_db()  # Старая инициализация для совместимости
+    init_new_database_schema()  # Новая схема БД
+    migrate_existing_data()  # Миграция данных
     application = Application.builder().token(BOT_TOKEN).build()
 
     # Обработчик для отчетов
@@ -4732,57 +4836,49 @@ def is_username_authorized(username: str) -> bool:
     return False
 
 def add_authorized_user(username: str, user_id: int = None, folder_name: str = None, role: str = "user") -> tuple[bool, str]:
-    """Добавляет нового авторизованного пользователя с созданием персональной папки"""
+    """Добавляет нового авторизованного пользователя в базу данных"""
     try:
-        users_data = load_authorized_users()
-        
-        # Проверяем, не существует ли уже пользователь с таким именем
-        for user in users_data.get("users", []):
-            if user.get("username") == username:
-                return False, "Пользователь с таким именем уже существует"
+        # Проверяем, не существует ли уже пользователь с таким telegram_id
+        if user_id:
+            existing_user = get_user_by_telegram_id(user_id)
+            if existing_user:
+                return False, "Пользователь с таким Telegram ID уже существует"
         
         # Генерируем уникальное название папки, если не задано
         if not folder_name:
             folder_name = f"user_{username}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
-        # Добавляем нового пользователя с дополнительными полями
-        new_user = {
-            "username": username,
-            "added_date": datetime.now().isoformat(),
-            "status": "active",
-            "role": role,
-            "folder_name": folder_name
-        }
-        
-        if user_id:
-            new_user["telegram_id"] = user_id
-        
-        users_data["users"].append(new_user)
-        
-        logger.info(f"Добавлен новый пользователь: {new_user}")
-        
-        if save_authorized_users(users_data):
-            # Создаем персональную папку для пользователя в базе данных
-            folder_created, folder_message = create_user_folder(username, folder_name, user_id)
-            if folder_created:
-                logger.info(f"Персональная папка создана для пользователя {username}")
-            else:
-                logger.warning(f"Не удалось создать папку для пользователя {username}: {folder_message}")
-            
-            logger.info(f"Пользователь '{username}' успешно сохранен")
-            return True, f"Пользователь успешно добавлен с папкой: {folder_name}"
+        # Создаем пользователя в базе данных
+        success = create_user(user_id, username, folder_name, role)
+        if success:
+            logger.info(f"Пользователь '{username}' успешно добавлен в БД")
+            return True, f"Пользователь успешно добавлен в базу данных"
         else:
-            logger.error(f"Ошибка при сохранении пользователя '{username}'")
-            return False, "Ошибка при сохранении"
+            logger.error(f"Ошибка при создании пользователя '{username}' в БД")
+            return False, "Ошибка при создании пользователя в базе данных"
             
     except Exception as e:
         logger.error(f"Ошибка при добавлении пользователя: {e}")
         return False, f"Ошибка: {str(e)}"
 
 def get_authorized_users_list() -> list:
-    """Возвращает список всех авторизованных пользователей"""
-    users_data = load_authorized_users()
-    return users_data.get("users", [])
+    """Возвращает список всех авторизованных пользователей из базы данных"""
+    try:
+        users = get_all_users()
+        return [
+            {
+                "username": user["username"],
+                "telegram_id": user["telegram_id"],
+                "role": user["role"],
+                "folder_name": user["folder_name"],
+                "added_date": user["created_at"].isoformat(),
+                "status": "active" if user["is_active"] else "inactive"
+            }
+            for user in users
+        ]
+    except Exception as e:
+        logger.error(f"Ошибка получения списка пользователей: {e}")
+        return []
 
 # --- ФУНКЦИИ СОЗДАНИЯ ПЕРСОНАЛЬНЫХ ПАПОК (Railway/Cloud) ---
 def create_user_folder(username: str, folder_name: str, user_id: int) -> tuple[bool, str]:
@@ -4930,118 +5026,36 @@ def create_user_folder(username: str, folder_name: str, user_id: int) -> tuple[b
 # Функция create_user_config_files удалена - теперь используется база данных
 
 def get_user_folder_path(user_id: int) -> str:
-    """Получает путь к папке пользователя"""
+    """Получает информацию о пользователе из базы данных (совместимость со старым кодом)"""
     try:
-        conn = get_db_connection()
-        if not conn:
-            return "user_data/default"  # Fallback к папке по умолчанию
-        
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT settings FROM user_folders 
-            WHERE user_id = %s
-        ''', (user_id,))
-        
-        result = cursor.fetchone()
-        conn.close()
-        
-        if result and result[0]:
-            settings_data = result[0]
-            # Проверяем, является ли settings_data уже словарем или строкой JSON
-            if isinstance(settings_data, dict):
-                settings = settings_data
-            else:
-                settings = json.loads(settings_data)
-            folder_path = settings.get('folder_path', 'user_data/default')
-            # Если путь содержит кириллицу, конвертируем его
-            if any('\u0400' <= char <= '\u04FF' for char in folder_path):
-                # Извлекаем название папки из пути
-                folder_name = folder_path.split('/')[-1]
-                # Конвертируем название папки
-                def transliterate_ru_to_en(text):
-                    translit_map = {
-                        'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'yo',
-                        'ж': 'zh', 'з': 'z', 'и': 'i', 'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm',
-                        'н': 'n', 'о': 'o', 'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u',
-                        'ф': 'f', 'х': 'h', 'ц': 'ts', 'ч': 'ch', 'ш': 'sh', 'щ': 'sch',
-                        'ъ': '', 'ы': 'y', 'ь': '', 'э': 'e', 'ю': 'yu', 'я': 'ya'
-                    }
-                    result = ''
-                    for char in text:
-                        if char in translit_map:
-                            result += translit_map[char]
-                        else:
-                            result += char
-                    return result
-                
-                safe_folder_name = transliterate_ru_to_en(folder_name).lower()
-                safe_folder_name = re.sub(r'[^a-z0-9_]', '_', safe_folder_name)
-                safe_folder_name = re.sub(r'_+', '_', safe_folder_name).strip('_')
-                folder_path = f"user_data/{safe_folder_name}"
-            
-            return folder_path
-        
-        # Если пользователь не найден в базе, создаем папку автоматически
-        logger.warning(f"Пользователь {user_id} не найден в базе. Создаем папку...")
-        try:
-            create_user_folder(user_id, f"user_{user_id}")
-            # Получаем путь к созданной папке
-            conn = get_db_connection()
-            if conn:
-                cursor = conn.cursor()
-                cursor.execute('''
-                    SELECT settings FROM user_folders 
-                    WHERE user_id = %s
-                ''', (user_id,))
-                result = cursor.fetchone()
-                conn.close()
-                
-                if result and result[0]:
-                    settings_data = result[0]
-                    if isinstance(settings_data, dict):
-                        settings = settings_data
-                    else:
-                        settings = json.loads(settings_data)
-                    return settings.get('folder_path', f"user_data/user_{user_id}")
-        except Exception as e:
-            logger.error(f"Ошибка при создании папки для пользователя {user_id}: {e}")
-        
-        return f"user_data/user_{user_id}"  # Fallback к папке пользователя
+        user = get_user_by_telegram_id(user_id)
+        if user:
+            # Возвращаем имя папки для совместимости
+            return user.get('folder_name', f'user_{user_id}')
+        else:
+            return f"user_{user_id}"
     except Exception as e:
-        logger.error(f"Ошибка при получении пути папки для пользователя {user_id}: {e}")
-        return f"user_data/user_{user_id}"  # Fallback к папке пользователя
+        logger.error(f"Ошибка получения информации о пользователе: {e}")
+        return f"user_{user_id}"
 
 def get_user_folder_info(username: str, user_id: int) -> dict:
-    """Возвращает информацию о папке пользователя из базы данных"""
+    """Возвращает информацию о пользователе из базы данных"""
     try:
-        conn = get_db_connection()
-        if not conn:
-            return None
-        
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT username, user_id, folder_name, role, settings, permissions, created_at
-            FROM user_folders 
-            WHERE username = %s AND user_id = %s
-        ''', (username, user_id))
-        
-        result = cursor.fetchone()
-        conn.close()
-        
-        if result:
+        user = get_user_by_telegram_id(user_id)
+        if user:
             return {
-                "username": result[0],
-                "user_id": result[1],
-                "folder_name": result[2],
-                "role": result[3],
-                "settings": result[4] if result[4] else {},
-                "permissions": result[5] if result[5] else {},
-                "created_at": result[6]
+                "username": user["username"],
+                "user_id": user["telegram_id"],
+                "folder_name": user["folder_name"],
+                "role": user["role"],
+                "settings": {},
+                "permissions": {},
+                "created_at": user["created_at"]
             }
         return None
         
     except Exception as e:
-        logger.error(f"Ошибка при получении информации о папке пользователя {username}: {e}")
+        logger.error(f"Ошибка при получении информации о пользователе {username}: {e}")
         return None
 
 def get_user_config(username: str, user_id: int) -> dict:
