@@ -521,3 +521,28 @@ def migrate_user_data_from_files(user_folder_path: str, telegram_id: int) -> boo
     except Exception as e:
         logger.error(f"Ошибка миграции данных пользователя: {e}")
         return False
+
+def update_user_role(telegram_id: int, new_role: str) -> bool:
+    """Обновляет роль пользователя"""
+    if not db_manager.is_available():
+        logger.warning("База данных недоступна")
+        return False
+    
+    try:
+        with db_manager.get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    UPDATE users 
+                    SET role = %s, updated_at = CURRENT_TIMESTAMP
+                    WHERE telegram_id = %s
+                """, (new_role, telegram_id))
+                
+                if cursor.rowcount > 0:
+                    logger.info(f"Роль пользователя {telegram_id} обновлена на {new_role}")
+                    return True
+                else:
+                    logger.warning(f"Пользователь {telegram_id} не найден")
+                    return False
+    except Exception as e:
+        logger.error(f"Ошибка обновления роли пользователя {telegram_id}: {e}")
+        return False

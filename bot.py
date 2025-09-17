@@ -268,6 +268,11 @@ def is_legacy_user(user_id: int) -> bool:
     legacy_user_ids = [498410375, 651498165]
     return user_id in legacy_user_ids
 
+def is_special_user(user_id: int) -> bool:
+    """Проверяет, является ли пользователь специальным (полный доступ к основным таблицам)"""
+    special_user_ids = [498410375, 651498165]
+    return user_id in special_user_ids
+
 def get_user_categories(user_id: int) -> list:
     """Получает категории пользователя из базы данных"""
     try:
@@ -725,7 +730,7 @@ def add_expense(amount, category, description, transaction_date, user_id=None):
             return False
         
         # Находим категорию по имени
-        categories = get_user_categories(user['id'])
+        categories = get_user_categories(user_id)
         category_id = None
         for cat in categories:
             if cat['category_name'] == category:
@@ -5006,10 +5011,19 @@ def is_username_authorized(username: str) -> bool:
 def add_authorized_user(username: str, user_id: int = None, folder_name: str = None, role: str = "user") -> tuple[bool, str]:
     """Добавляет нового авторизованного пользователя в базу данных"""
     try:
+        # Если это специальный пользователь, даем ему роль admin
+        if user_id and is_special_user(user_id):
+            role = 'admin'
+            logger.info(f"Специальный пользователь {user_id} получает роль admin")
+        
         # Проверяем, не существует ли уже пользователь с таким telegram_id
         if user_id:
             existing_user = get_user_by_telegram_id(user_id)
             if existing_user:
+                # Если пользователь уже существует, обновляем его роль на admin если он специальный
+                if is_special_user(user_id) and existing_user.get('role') != 'admin':
+                    update_user_role(user_id, 'admin')
+                    logger.info(f"Роль пользователя {user_id} обновлена на admin")
                 return False, "Пользователь с таким Telegram ID уже существует"
         
         # Генерируем уникальное название папки, если не задано
@@ -5019,8 +5033,8 @@ def add_authorized_user(username: str, user_id: int = None, folder_name: str = N
         # Создаем пользователя в базе данных
         success = create_user(user_id, username, folder_name, role)
         if success:
-            logger.info(f"Пользователь '{username}' успешно добавлен в БД")
-            return True, f"Пользователь успешно добавлен в базу данных"
+            logger.info(f"Пользователь '{username}' успешно добавлен в БД с ролью '{role}'")
+            return True, f"Пользователь успешно добавлен в базу данных с ролью '{role}'"
         else:
             logger.error(f"Ошибка при создании пользователя '{username}' в БД")
             return False, "Ошибка при создании пользователя в базе данных"
