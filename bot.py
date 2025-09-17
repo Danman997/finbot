@@ -291,6 +291,7 @@ def get_user_categories(user_id: int) -> list:
         categories = db_get_user_categories(user['id'])
         return [
             {
+                'id': cat['id'],
                 'name': cat['category_name'],
                 'type': cat['category_type'],
                 'color': cat['color'],
@@ -740,7 +741,7 @@ def add_expense(amount, category, description, transaction_date, user_id=None):
         categories = get_user_categories(user_id)
         category_id = None
         for cat in categories:
-            if cat['category_name'] == category:
+            if cat['name'] == category:  # Исправлено: было 'category_name'
                 category_id = cat['id']
                 break
         
@@ -750,7 +751,7 @@ def add_expense(amount, category, description, transaction_date, user_id=None):
         
         # Добавляем расход в БД (используем функцию из database.py)
         from database import add_expense as db_add_expense
-        success = db_add_expense(user['id'], category_id, amount, description, transaction_date)
+        success = db_add_expense(user_id, category_id, amount, description, transaction_date)
         if success:
             logger.info(f"Расход успешно добавлен в БД для пользователя {user_id}")
             return True
@@ -5040,6 +5041,9 @@ def add_authorized_user(username: str, user_id: int = None, folder_name: str = N
         # Создаем пользователя в базе данных
         success = create_user(user_id, username, folder_name, role)
         if success:
+            # Создаем категории по умолчанию для нового пользователя
+            from database import create_default_categories
+            create_default_categories(user_id)
             logger.info(f"Пользователь '{username}' успешно добавлен в БД с ролью '{role}'")
             return True, f"Пользователь успешно добавлен в базу данных с ролью '{role}'"
         else:

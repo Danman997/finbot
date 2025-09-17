@@ -181,10 +181,16 @@ def update_user_role(telegram_id: int, new_role: str) -> bool:
 
 # ============ ФУНКЦИИ ДЛЯ РАБОТЫ С КАТЕГОРИЯМИ ============
 
-def get_user_categories(user_id: int) -> List[Dict[str, Any]]:
+def get_user_categories(telegram_id: int) -> List[Dict[str, Any]]:
     """Получение категорий пользователя"""
     if not db_manager.is_available():
         logger.warning("База данных недоступна")
+        return []
+    
+    # Получаем пользователя по telegram_id
+    user = get_user_by_telegram_id(telegram_id)
+    if not user:
+        logger.error(f"Пользователь {telegram_id} не найден")
         return []
     
     # Принудительно создаем таблицу user_categories если её нет
@@ -213,13 +219,19 @@ def get_user_categories(user_id: int) -> List[Dict[str, Any]]:
         WHERE user_id = %s 
         ORDER BY category_name
     """
-    result = db_manager.execute_query(query, (user_id,), fetch=True)
+    result = db_manager.execute_query(query, (user['id'],), fetch=True)
     return result if result else []
 
-def create_default_categories(user_id: int) -> bool:
+def create_default_categories(telegram_id: int) -> bool:
     """Создание категорий по умолчанию для пользователя"""
     if not db_manager.is_available():
         logger.warning("База данных недоступна")
+        return False
+    
+    # Получаем пользователя по telegram_id
+    user = get_user_by_telegram_id(telegram_id)
+    if not user:
+        logger.error(f"Пользователь {telegram_id} не найден")
         return False
     
     default_categories = [
@@ -239,9 +251,9 @@ def create_default_categories(user_id: int) -> bool:
                 VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (user_id, category_name) DO NOTHING
             """
-            db_manager.execute_query(query, (user_id, category_name, category_type, color, icon))
+            db_manager.execute_query(query, (user['id'], category_name, category_type, color, icon))
         
-        logger.info(f"Созданы категории по умолчанию для пользователя {user_id}")
+        logger.info(f"Созданы категории по умолчанию для пользователя {telegram_id}")
         return True
     except Exception as e:
         logger.error(f"Ошибка создания категорий по умолчанию: {e}")
@@ -249,10 +261,16 @@ def create_default_categories(user_id: int) -> bool:
 
 # ============ ФУНКЦИИ ДЛЯ РАБОТЫ С РАСХОДАМИ ============
 
-def add_expense(user_id: int, category_id: int, amount: float, description: str, expense_date: date) -> bool:
+def add_expense(telegram_id: int, category_id: int, amount: float, description: str, expense_date: date) -> bool:
     """Добавление расхода"""
     if not db_manager.is_available():
         logger.warning("База данных недоступна")
+        return False
+    
+    # Получаем пользователя по telegram_id
+    user = get_user_by_telegram_id(telegram_id)
+    if not user:
+        logger.error(f"Пользователь {telegram_id} не найден")
         return False
     
     # Принудительно создаем таблицу expenses если её нет
@@ -281,15 +299,21 @@ def add_expense(user_id: int, category_id: int, amount: float, description: str,
         VALUES (%s, %s, %s, %s, %s)
     """
     
-    result = db_manager.execute_query(query, (user_id, category_id, amount, description, expense_date))
+    result = db_manager.execute_query(query, (user['id'], category_id, amount, description, expense_date))
     return result is not None
 
 # ============ ФУНКЦИИ ДЛЯ РАБОТЫ С ПЛАНАМИ БЮДЖЕТА ============
 
-def get_user_budget_plans(user_id: int) -> List[Dict[str, Any]]:
+def get_user_budget_plans(telegram_id: int) -> List[Dict[str, Any]]:
     """Получение планов бюджета пользователя"""
     if not db_manager.is_available():
         logger.warning("База данных недоступна")
+        return []
+    
+    # Получаем пользователя по telegram_id
+    user = get_user_by_telegram_id(telegram_id)
+    if not user:
+        logger.error(f"Пользователь {telegram_id} не найден")
         return []
     
     query = """
@@ -297,14 +321,20 @@ def get_user_budget_plans(user_id: int) -> List[Dict[str, Any]]:
         WHERE user_id = %s AND is_active = TRUE
         ORDER BY created_at DESC
     """
-    result = db_manager.execute_query(query, (user_id,), fetch=True)
+    result = db_manager.execute_query(query, (user['id'],), fetch=True)
     return result if result else []
 
-def save_user_budget_plan(user_id: int, plan_name: str, total_amount: float, 
+def save_user_budget_plan(telegram_id: int, plan_name: str, total_amount: float, 
                          start_date: date, end_date: date, categories: List[str] = None) -> bool:
     """Сохранение плана бюджета пользователя"""
     if not db_manager.is_available():
         logger.warning("База данных недоступна")
+        return False
+    
+    # Получаем пользователя по telegram_id
+    user = get_user_by_telegram_id(telegram_id)
+    if not user:
+        logger.error(f"Пользователь {telegram_id} не найден")
         return False
     
     # Принудительно создаем таблицу budget_plans если её нет
@@ -337,15 +367,21 @@ def save_user_budget_plan(user_id: int, plan_name: str, total_amount: float,
     """
     
     categories_json = json.dumps(categories) if categories else None
-    result = db_manager.execute_query(query, (user_id, plan_name, total_amount, start_date, end_date, categories_json))
+    result = db_manager.execute_query(query, (user['id'], plan_name, total_amount, start_date, end_date, categories_json))
     return result is not None
 
 # ============ ФУНКЦИИ ДЛЯ РАБОТЫ С НАПОМИНАНИЯМИ ============
 
-def get_user_reminders(user_id: int) -> List[Dict[str, Any]]:
+def get_user_reminders(telegram_id: int) -> List[Dict[str, Any]]:
     """Получение напоминаний пользователя"""
     if not db_manager.is_available():
         logger.warning("База данных недоступна")
+        return []
+    
+    # Получаем пользователя по telegram_id
+    user = get_user_by_telegram_id(telegram_id)
+    if not user:
+        logger.error(f"Пользователь {telegram_id} не найден")
         return []
     
     query = """
@@ -353,14 +389,20 @@ def get_user_reminders(user_id: int) -> List[Dict[str, Any]]:
         WHERE user_id = %s AND is_completed = FALSE
         ORDER BY reminder_date, reminder_time
     """
-    result = db_manager.execute_query(query, (user_id,), fetch=True)
+    result = db_manager.execute_query(query, (user['id'],), fetch=True)
     return result if result else []
 
-def add_reminder(user_id: int, title: str, description: str, reminder_date: date, 
+def add_reminder(telegram_id: int, title: str, description: str, reminder_date: date, 
                 reminder_time: time = None, is_recurring: bool = False, pattern: str = None) -> bool:
     """Добавление напоминания"""
     if not db_manager.is_available():
         logger.warning("База данных недоступна")
+        return False
+    
+    # Получаем пользователя по telegram_id
+    user = get_user_by_telegram_id(telegram_id)
+    if not user:
+        logger.error(f"Пользователь {telegram_id} не найден")
         return False
     
     query = """
@@ -368,7 +410,7 @@ def add_reminder(user_id: int, title: str, description: str, reminder_date: date
         VALUES (%s, %s, %s, %s, %s, %s, %s)
     """
     
-    result = db_manager.execute_query(query, (user_id, title, description, reminder_date, reminder_time, is_recurring, pattern))
+    result = db_manager.execute_query(query, (user['id'], title, description, reminder_date, reminder_time, is_recurring, pattern))
     return result is not None
 
 def delete_reminder(reminder_id: int) -> bool:
@@ -382,17 +424,23 @@ def delete_reminder(reminder_id: int) -> bool:
 
 # ============ ФУНКЦИИ ДЛЯ РАБОТЫ С НАСТРОЙКАМИ ============
 
-def get_user_settings(user_id: int) -> Dict[str, Any]:
+def get_user_settings(telegram_id: int) -> Dict[str, Any]:
     """Получение настроек пользователя"""
     if not db_manager.is_available():
         logger.warning("База данных недоступна")
+        return {}
+    
+    # Получаем пользователя по telegram_id
+    user = get_user_by_telegram_id(telegram_id)
+    if not user:
+        logger.error(f"Пользователь {telegram_id} не найден")
         return {}
     
     query = """
         SELECT setting_key, setting_value FROM user_settings 
         WHERE user_id = %s
     """
-    result = db_manager.execute_query(query, (user_id,), fetch=True)
+    result = db_manager.execute_query(query, (user['id'],), fetch=True)
     
     settings = {}
     if result:
@@ -401,10 +449,16 @@ def get_user_settings(user_id: int) -> Dict[str, Any]:
     
     return settings
 
-def save_user_setting(user_id: int, key: str, value: str) -> bool:
+def save_user_setting(telegram_id: int, key: str, value: str) -> bool:
     """Сохранение настройки пользователя"""
     if not db_manager.is_available():
         logger.warning("База данных недоступна")
+        return False
+    
+    # Получаем пользователя по telegram_id
+    user = get_user_by_telegram_id(telegram_id)
+    if not user:
+        logger.error(f"Пользователь {telegram_id} не найден")
         return False
     
     query = """
@@ -414,7 +468,7 @@ def save_user_setting(user_id: int, key: str, value: str) -> bool:
         DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = CURRENT_TIMESTAMP
     """
     
-    result = db_manager.execute_query(query, (user_id, key, value))
+    result = db_manager.execute_query(query, (user['id'], key, value))
     return result is not None
 
 # ============ ФУНКЦИИ ИНИЦИАЛИЗАЦИИ ============
@@ -529,10 +583,16 @@ def ensure_tables_exist():
         logger.error(f"Ошибка создания таблиц: {e}")
         return False
 
-def migrate_user_data(user_id: int, user_folder_path: str) -> bool:
+def migrate_user_data(telegram_id: int, user_folder_path: str) -> bool:
     """Миграция данных пользователя из JSON файлов в базу данных"""
     if not db_manager.is_available():
         logger.warning("База данных недоступна")
+        return False
+    
+    # Получаем пользователя по telegram_id
+    user = get_user_by_telegram_id(telegram_id)
+    if not user:
+        logger.error(f"Пользователь {telegram_id} не найден")
         return False
     
     try:
@@ -548,7 +608,7 @@ def migrate_user_data(user_id: int, user_folder_path: str) -> bool:
                         ON CONFLICT (user_id, category_name) DO NOTHING
                     """
                     db_manager.execute_query(query, (
-                        user_id, 
+                        user['id'], 
                         category['name'], 
                         category.get('type', 'expense'),
                         category.get('color', '#3498db'),
@@ -566,7 +626,7 @@ def migrate_user_data(user_id: int, user_folder_path: str) -> bool:
                         SELECT id FROM user_categories 
                         WHERE user_id = %s AND category_name = %s
                     """
-                    category_result = db_manager.execute_query(category_query, (user_id, expense['category']), fetch=True)
+                    category_result = db_manager.execute_query(category_query, (user['id'], expense['category']), fetch=True)
                     category_id = category_result[0]['id'] if category_result else None
                     
                     expense_date = datetime.strptime(expense['date'], '%Y-%m-%d').date()
@@ -575,7 +635,7 @@ def migrate_user_data(user_id: int, user_folder_path: str) -> bool:
                         VALUES (%s, %s, %s, %s, %s)
                     """
                     db_manager.execute_query(query, (
-                        user_id, 
+                        user['id'], 
                         category_id, 
                         expense['amount'], 
                         expense.get('description', ''), 
@@ -597,7 +657,7 @@ def migrate_user_data(user_id: int, user_folder_path: str) -> bool:
                         VALUES (%s, %s, %s, %s, %s, %s)
                     """
                     db_manager.execute_query(query, (
-                        user_id, 
+                        user['id'], 
                         plan['name'], 
                         plan['total_amount'], 
                         start_date, 
@@ -614,7 +674,7 @@ def migrate_user_data(user_id: int, user_folder_path: str) -> bool:
                     reminder_date = datetime.strptime(reminder['date'], '%Y-%m-%d').date()
                     reminder_time = datetime.strptime(reminder.get('time', '00:00'), '%H:%M').time()
                     add_reminder(
-                        user_id,
+                        telegram_id,
                         reminder['title'],
                         reminder.get('description'),
                         reminder_date,
