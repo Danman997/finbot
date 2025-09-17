@@ -268,10 +268,17 @@ def is_legacy_user(user_id: int) -> bool:
     legacy_user_ids = [498410375, 651498165]
     return user_id in legacy_user_ids
 
-def is_special_user(user_id: int) -> bool:
-    """Проверяет, является ли пользователь специальным (полный доступ к основным таблицам)"""
-    special_user_ids = [498410375, 651498165]
-    return user_id in special_user_ids
+def is_admin_user(user_id: int) -> bool:
+    """Проверяет, является ли пользователь админом (доступ к БД postgres)"""
+    admin_user_ids = [498410375, 651498165]
+    return user_id in admin_user_ids
+
+def get_database_name(user_id: int) -> str:
+    """Возвращает название базы данных для пользователя"""
+    if is_admin_user(user_id):
+        return 'postgres'  # Админы используют основную БД
+    else:
+        return 'postgres-_GZb'  # Обычные пользователи используют пользовательскую БД
 
 def get_user_categories(user_id: int) -> list:
     """Получает категории пользователя из базы данных"""
@@ -5011,17 +5018,17 @@ def is_username_authorized(username: str) -> bool:
 def add_authorized_user(username: str, user_id: int = None, folder_name: str = None, role: str = "user") -> tuple[bool, str]:
     """Добавляет нового авторизованного пользователя в базу данных"""
     try:
-        # Если это специальный пользователь, даем ему роль admin
-        if user_id and is_special_user(user_id):
+        # Если это админ, даем ему роль admin
+        if user_id and is_admin_user(user_id):
             role = 'admin'
-            logger.info(f"Специальный пользователь {user_id} получает роль admin")
+            logger.info(f"Админ {user_id} получает роль admin")
         
         # Проверяем, не существует ли уже пользователь с таким telegram_id
         if user_id:
             existing_user = get_user_by_telegram_id(user_id)
             if existing_user:
-                # Если пользователь уже существует, обновляем его роль на admin если он специальный
-                if is_special_user(user_id) and existing_user.get('role') != 'admin':
+                # Если пользователь уже существует, обновляем его роль на admin если он админ
+                if is_admin_user(user_id) and existing_user.get('role') != 'admin':
                     update_user_role(user_id, 'admin')
                     logger.info(f"Роль пользователя {user_id} обновлена на admin")
                 return False, "Пользователь с таким Telegram ID уже существует"

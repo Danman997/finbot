@@ -118,46 +118,76 @@ def create_user(telegram_id: int, username: str = None, folder_name: str = None,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     is_active BOOLEAN DEFAULT TRUE
-                );
+                )
             """)
             conn.commit()
-            logger.info("✅ Таблица users создана/проверена в create_user")
     except Exception as e:
-        logger.error(f"Ошибка создания таблицы users в create_user: {e}")
+        logger.error(f"Ошибка создания таблицы users: {e}")
+    
+    query = """
+        INSERT INTO users (telegram_id, username, folder_name, role)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (telegram_id) DO UPDATE SET
+            username = EXCLUDED.username,
+            folder_name = EXCLUDED.folder_name,
+            role = EXCLUDED.role,
+            updated_at = CURRENT_TIMESTAMP
+    """
+    
+    result = db_manager.execute_query(query, (telegram_id, username, folder_name, role))
+    return result is not None
+
+def get_all_users() -> List[Dict[str, Any]]:
+    """Получает всех пользователей из базы данных"""
+    if not db_manager.is_available():
+        logger.warning("База данных недоступна")
+        return []
     
     try:
         query = """
-            INSERT INTO users (telegram_id, username, folder_name, role)
-            VALUES (%s, %s, %s, %s)
-            ON CONFLICT (telegram_id) DO UPDATE SET
-                username = EXCLUDED.username,
-                folder_name = EXCLUDED.folder_name,
-                role = EXCLUDED.role,
-                is_active = TRUE,
-                updated_at = CURRENT_TIMESTAMP
+            SELECT id, telegram_id, username, folder_name, role, created_at, updated_at, is_active
+            FROM users 
+            WHERE is_active = TRUE 
+            ORDER BY created_at DESC
         """
-        db_manager.execute_query(query, (telegram_id, username, folder_name, role))
-        
-        # Создаем стандартные категории для нового пользователя
-        user = get_user_by_telegram_id(telegram_id)
-        if user:
-            create_default_categories(user['id'])
-        
-        return True
+        result = db_manager.execute_query(query, fetch=True)
+        return result if result else []
     except Exception as e:
-        logger.error(f"Ошибка создания пользователя: {e}")
-        return False
+        logger.error(f"Ошибка получения всех пользователей: {e}")
+        return []
 
-def get_all_users() -> List[Dict]:
-    """Получение всех активных пользователей"""
-    query = "SELECT * FROM users WHERE is_active = TRUE ORDER BY created_at"
-    return db_manager.execute_query(query, fetch=True) or []
+def update_user_role(telegram_id: int, new_role: str) -> bool:
+    """Обновляет роль пользователя"""
+    if not db_manager.is_available():
+        logger.warning("База данных недоступна")
+        return False
+    
+    try:
+        query = """
+            UPDATE users 
+            SET role = %s, updated_at = CURRENT_TIMESTAMP
+            WHERE telegram_id = %s
+        """
+        result = db_manager.execute_query(query, (new_role, telegram_id))
+        if result and result > 0:
+            logger.info(f"Роль пользователя {telegram_id} обновлена на {new_role}")
+            return True
+        else:
+            logger.warning(f"Пользователь {telegram_id} не найден")
+            return False
+    except Exception as e:
+        logger.error(f"Ошибка обновления роли пользователя {telegram_id}: {e}")
+        return False
 
 # ============ ФУНКЦИИ ДЛЯ РАБОТЫ С КАТЕГОРИЯМИ ============
 
-def create_default_categories(user_id: int) -> bool:
-    """Создание стандартных категорий для пользователя"""
-    # Создаем таблицу user_categories если её нет
+def get_user_categories(user_id: int) -> List[Dict[str, Any]]:
+    """Получение категорий пользователя"""
+    if not db_manager.is_available():
+        logger.warning("База данных недоступна")
+        return []
+    
+    # Принудительно создаем таблицу user_categories если её нет
     try:
         conn = db_manager.get_connection()
         if conn:
@@ -172,70 +202,60 @@ def create_default_categories(user_id: int) -> bool:
                     icon VARCHAR(50),
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(user_id, category_name)
-                );
+                )
             """)
             conn.commit()
-            logger.info("✅ Таблица user_categories создана/проверена")
     except Exception as e:
         logger.error(f"Ошибка создания таблицы user_categories: {e}")
+    
+    query = """
+        SELECT * FROM user_categories 
+        WHERE user_id = %s 
+        ORDER BY category_name
+    """
+    result = db_manager.execute_query(query, (user_id,), fetch=True)
+    return result if result else []
+
+def create_default_categories(user_id: int) -> bool:
+    """Создание категорий по умолчанию для пользователя"""
+    if not db_manager.is_available():
+        logger.warning("База данных недоступна")
+        return False
     
     default_categories = [
         ("Продукты", "expense", "#e74c3c", "🛒"),
         ("Транспорт", "expense", "#3498db", "🚗"),
-        ("Развлечения", "expense", "#f39c12", "🎮"),
-        ("Здоровье", "expense", "#e91e63", "🏥"),
-        ("Одежда", "expense", "#9b59b6", "👕"),
-        ("Дом", "expense", "#1abc9c", "🏠"),
-        ("Образование", "expense", "#34495e", "📚"),
-        ("Другое", "expense", "#95a5a6", "📦"),
-        ("Зарплата", "income", "#27ae60", "💰"),
-        ("Подработка", "income", "#2ecc71", "💼")
+        ("Развлечения", "expense", "#9b59b6", "🎮"),
+        ("Здоровье", "expense", "#2ecc71", "🏥"),
+        ("Одежда", "expense", "#f39c12", "👕"),
+        ("Дом", "expense", "#34495e", "🏠"),
+        ("Другое", "expense", "#95a5a6", "📦")
     ]
     
     try:
-        query = """
-            INSERT INTO user_categories (user_id, category_name, category_type, color, icon)
-            VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT (user_id, category_name) DO NOTHING
-        """
-        for name, cat_type, color, icon in default_categories:
-            db_manager.execute_query(query, (user_id, name, cat_type, color, icon))
+        for category_name, category_type, color, icon in default_categories:
+            query = """
+                INSERT INTO user_categories (user_id, category_name, category_type, color, icon)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (user_id, category_name) DO NOTHING
+            """
+            db_manager.execute_query(query, (user_id, category_name, category_type, color, icon))
+        
+        logger.info(f"Созданы категории по умолчанию для пользователя {user_id}")
         return True
     except Exception as e:
-        logger.error(f"Ошибка создания категорий: {e}")
-        return False
-
-def get_user_categories(user_id: int, category_type: str = "expense") -> List[Dict]:
-    """Получение категорий пользователя"""
-    query = """
-        SELECT * FROM user_categories 
-        WHERE user_id = %s AND category_type = %s
-        ORDER BY category_name
-    """
-    return db_manager.execute_query(query, (user_id, category_type), fetch=True) or []
-
-def add_user_category(user_id: int, category_name: str, category_type: str = "expense", 
-                     color: str = "#3498db", icon: str = "📦") -> bool:
-    """Добавление новой категории пользователю"""
-    try:
-        query = """
-            INSERT INTO user_categories (user_id, category_name, category_type, color, icon)
-            VALUES (%s, %s, %s, %s, %s)
-        """
-        db_manager.execute_query(query, (user_id, category_name, category_type, color, icon))
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка добавления категории: {e}")
+        logger.error(f"Ошибка создания категорий по умолчанию: {e}")
         return False
 
 # ============ ФУНКЦИИ ДЛЯ РАБОТЫ С РАСХОДАМИ ============
 
-def add_expense(user_id: int, category_id: int, amount: float, description: str = None, expense_date: date = None) -> bool:
+def add_expense(user_id: int, category_id: int, amount: float, description: str, expense_date: date) -> bool:
     """Добавление расхода"""
-    if expense_date is None:
-        expense_date = date.today()
+    if not db_manager.is_available():
+        logger.warning("База данных недоступна")
+        return False
     
-    # Создаем таблицу expenses если её нет
+    # Принудительно создаем таблицу expenses если её нет
     try:
         conn = db_manager.get_connection()
         if conn:
@@ -250,212 +270,290 @@ def add_expense(user_id: int, category_id: int, amount: float, description: str 
                     date DATE NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
+                )
             """)
             conn.commit()
-            logger.info("✅ Таблица expenses создана/проверена")
     except Exception as e:
         logger.error(f"Ошибка создания таблицы expenses: {e}")
     
-    try:
-        query = """
-            INSERT INTO expenses (user_id, category_id, amount, description, date)
-            VALUES (%s, %s, %s, %s, %s)
-        """
-        db_manager.execute_query(query, (user_id, category_id, amount, description, expense_date))
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка добавления расхода: {e}")
-        return False
-
-def get_user_expenses(user_id: int, start_date: date = None, end_date: date = None) -> List[Dict]:
-    """Получение расходов пользователя за период"""
     query = """
-        SELECT e.*, uc.category_name, uc.color, uc.icon
-        FROM expenses e
-        LEFT JOIN user_categories uc ON e.category_id = uc.id
-        WHERE e.user_id = %s
+        INSERT INTO expenses (user_id, category_id, amount, description, date)
+        VALUES (%s, %s, %s, %s, %s)
     """
-    params = [user_id]
     
-    if start_date:
-        query += " AND e.date >= %s"
-        params.append(start_date)
-    
-    if end_date:
-        query += " AND e.date <= %s"
-        params.append(end_date)
-    
-    query += " ORDER BY e.date DESC"
-    
-    return db_manager.execute_query(query, tuple(params), fetch=True) or []
-
-def get_expenses_by_category(user_id: int, start_date: date = None, end_date: date = None) -> List[Dict]:
-    """Получение расходов по категориям за период"""
-    query = """
-        SELECT 
-            uc.category_name,
-            uc.color,
-            uc.icon,
-            SUM(e.amount) as total_amount,
-            COUNT(e.id) as expense_count
-        FROM expenses e
-        LEFT JOIN user_categories uc ON e.category_id = uc.id
-        WHERE e.user_id = %s
-    """
-    params = [user_id]
-    
-    if start_date:
-        query += " AND e.date >= %s"
-        params.append(start_date)
-    
-    if end_date:
-        query += " AND e.date <= %s"
-        params.append(end_date)
-    
-    query += " GROUP BY uc.id, uc.category_name, uc.color, uc.icon ORDER BY total_amount DESC"
-    
-    return db_manager.execute_query(query, tuple(params), fetch=True) or []
+    result = db_manager.execute_query(query, (user_id, category_id, amount, description, expense_date))
+    return result is not None
 
 # ============ ФУНКЦИИ ДЛЯ РАБОТЫ С ПЛАНАМИ БЮДЖЕТА ============
 
-def create_budget_plan(user_id: int, plan_name: str, total_amount: float, 
-                      start_date: date, end_date: date, categories: Dict = None) -> bool:
-    """Создание плана бюджета"""
-    try:
-        query = """
-            INSERT INTO budget_plans (user_id, plan_name, total_amount, start_date, end_date, categories)
-            VALUES (%s, %s, %s, %s, %s, %s)
-        """
-        categories_json = json.dumps(categories) if categories else None
-        db_manager.execute_query(query, (user_id, plan_name, total_amount, start_date, end_date, categories_json))
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка создания плана бюджета: {e}")
-        return False
-
-def get_user_budget_plans(user_id: int, active_only: bool = True) -> List[Dict]:
+def get_user_budget_plans(user_id: int) -> List[Dict[str, Any]]:
     """Получение планов бюджета пользователя"""
+    if not db_manager.is_available():
+        logger.warning("База данных недоступна")
+        return []
+    
     query = """
         SELECT * FROM budget_plans 
-        WHERE user_id = %s
+        WHERE user_id = %s AND is_active = TRUE
+        ORDER BY created_at DESC
     """
-    params = [user_id]
-    
-    if active_only:
-        query += " AND is_active = TRUE"
-    
-    query += " ORDER BY created_at DESC"
-    
-    return db_manager.execute_query(query, tuple(params), fetch=True) or []
+    result = db_manager.execute_query(query, (user_id,), fetch=True)
+    return result if result else []
 
-def update_budget_plan_spent(user_id: int, plan_id: int, spent_amount: float) -> bool:
-    """Обновление потраченной суммы в плане бюджета"""
-    try:
-        query = """
-            UPDATE budget_plans 
-            SET spent_amount = %s, updated_at = CURRENT_TIMESTAMP
-            WHERE id = %s AND user_id = %s
-        """
-        db_manager.execute_query(query, (spent_amount, plan_id, user_id))
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка обновления плана бюджета: {e}")
+def save_user_budget_plan(user_id: int, plan_name: str, total_amount: float, 
+                         start_date: date, end_date: date, categories: List[str] = None) -> bool:
+    """Сохранение плана бюджета пользователя"""
+    if not db_manager.is_available():
+        logger.warning("База данных недоступна")
         return False
+    
+    # Принудительно создаем таблицу budget_plans если её нет
+    try:
+        conn = db_manager.get_connection()
+        if conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS budget_plans (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                    plan_name VARCHAR(255) NOT NULL,
+                    total_amount DECIMAL(10,2) NOT NULL,
+                    spent_amount DECIMAL(10,2) DEFAULT 0.00,
+                    start_date DATE NOT NULL,
+                    end_date DATE NOT NULL,
+                    categories JSONB,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.commit()
+    except Exception as e:
+        logger.error(f"Ошибка создания таблицы budget_plans: {e}")
+    
+    query = """
+        INSERT INTO budget_plans (user_id, plan_name, total_amount, start_date, end_date, categories)
+        VALUES (%s, %s, %s, %s, %s, %s)
+    """
+    
+    categories_json = json.dumps(categories) if categories else None
+    result = db_manager.execute_query(query, (user_id, plan_name, total_amount, start_date, end_date, categories_json))
+    return result is not None
 
 # ============ ФУНКЦИИ ДЛЯ РАБОТЫ С НАПОМИНАНИЯМИ ============
 
-def add_reminder(user_id: int, title: str, description: str = None, 
-                reminder_date: date = None, reminder_time: time = None,
-                is_recurring: bool = False, recurring_pattern: str = None) -> bool:
-    """Добавление напоминания"""
-    if reminder_date is None:
-        reminder_date = date.today()
-    
-    try:
-        query = """
-            INSERT INTO reminders (user_id, title, description, reminder_date, reminder_time, is_recurring, recurring_pattern)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """
-        db_manager.execute_query(query, (user_id, title, description, reminder_date, reminder_time, is_recurring, recurring_pattern))
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка добавления напоминания: {e}")
-        return False
-
-def get_user_reminders(user_id: int, upcoming_only: bool = True) -> List[Dict]:
+def get_user_reminders(user_id: int) -> List[Dict[str, Any]]:
     """Получение напоминаний пользователя"""
+    if not db_manager.is_available():
+        logger.warning("База данных недоступна")
+        return []
+    
     query = """
         SELECT * FROM reminders 
-        WHERE user_id = %s
+        WHERE user_id = %s AND is_completed = FALSE
+        ORDER BY reminder_date, reminder_time
     """
-    params = [user_id]
+    result = db_manager.execute_query(query, (user_id,), fetch=True)
+    return result if result else []
+
+def add_reminder(user_id: int, title: str, description: str, reminder_date: date, 
+                reminder_time: time = None, is_recurring: bool = False, pattern: str = None) -> bool:
+    """Добавление напоминания"""
+    if not db_manager.is_available():
+        logger.warning("База данных недоступна")
+        return False
     
-    if upcoming_only:
-        query += " AND reminder_date >= CURRENT_DATE AND is_completed = FALSE"
+    query = """
+        INSERT INTO reminders (user_id, title, description, reminder_date, reminder_time, is_recurring, recurring_pattern)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+    """
     
-    query += " ORDER BY reminder_date, reminder_time"
+    result = db_manager.execute_query(query, (user_id, title, description, reminder_date, reminder_time, is_recurring, pattern))
+    return result is not None
+
+def delete_reminder(reminder_id: int) -> bool:
+    """Удаление напоминания"""
+    query = """
+        DELETE FROM reminders WHERE id = %s
+    """
     
-    return db_manager.execute_query(query, tuple(params), fetch=True) or []
+    result = db_manager.execute_query(query, (reminder_id,))
+    return result is not None
 
 # ============ ФУНКЦИИ ДЛЯ РАБОТЫ С НАСТРОЙКАМИ ============
 
-def get_user_setting(user_id: int, setting_key: str) -> Optional[str]:
-    """Получение настройки пользователя"""
+def get_user_settings(user_id: int) -> Dict[str, Any]:
+    """Получение настроек пользователя"""
+    if not db_manager.is_available():
+        logger.warning("База данных недоступна")
+        return {}
+    
     query = """
-        SELECT setting_value FROM user_settings 
-        WHERE user_id = %s AND setting_key = %s
+        SELECT setting_key, setting_value FROM user_settings 
+        WHERE user_id = %s
     """
-    result = db_manager.execute_query(query, (user_id, setting_key), fetch=True)
-    return result[0]['setting_value'] if result else None
+    result = db_manager.execute_query(query, (user_id,), fetch=True)
+    
+    settings = {}
+    if result:
+        for row in result:
+            settings[row['setting_key']] = row['setting_value']
+    
+    return settings
 
-def set_user_setting(user_id: int, setting_key: str, setting_value: str) -> bool:
-    """Установка настройки пользователя"""
+def save_user_setting(user_id: int, key: str, value: str) -> bool:
+    """Сохранение настройки пользователя"""
+    if not db_manager.is_available():
+        logger.warning("База данных недоступна")
+        return False
+    
+    query = """
+        INSERT INTO user_settings (user_id, setting_key, setting_value)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (user_id, setting_key) 
+        DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = CURRENT_TIMESTAMP
+    """
+    
+    result = db_manager.execute_query(query, (user_id, key, value))
+    return result is not None
+
+# ============ ФУНКЦИИ ИНИЦИАЛИЗАЦИИ ============
+
+def init_db():
+    """Инициализация базы данных"""
     try:
-        query = """
-            INSERT INTO user_settings (user_id, setting_key, setting_value)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (user_id, setting_key) 
-            DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = CURRENT_TIMESTAMP
-        """
-        db_manager.execute_query(query, (user_id, setting_key, setting_value))
+        db_manager.connect()
+        logger.info("База данных инициализирована")
         return True
     except Exception as e:
-        logger.error(f"Ошибка установки настройки: {e}")
+        logger.error(f"Ошибка инициализации базы данных: {e}")
         return False
 
-# ============ ФУНКЦИИ МИГРАЦИИ ============
-
-def migrate_user_data_from_files(user_folder_path: str, telegram_id: int) -> bool:
-    """Миграция данных пользователя из файловой системы в базу данных"""
+def ensure_tables_exist():
+    """Создание таблиц если их нет"""
     try:
-        # Создаем пользователя в БД
-        user = get_user_by_telegram_id(telegram_id)
-        if not user:
-            # Извлекаем username из пути папки
-            folder_name = os.path.basename(user_folder_path)
-            username = folder_name.split('_')[0] if '_' in folder_name else folder_name
-            create_user(telegram_id, username, folder_name)
-            user = get_user_by_telegram_id(telegram_id)
+        if db_manager.is_available():
+            conn = db_manager.get_connection()
+            if conn:
+                cursor = conn.cursor()
+                
+                # Создаем все таблицы
+                tables = [
+                    """
+                    CREATE TABLE IF NOT EXISTS users (
+                        id SERIAL PRIMARY KEY,
+                        telegram_id BIGINT UNIQUE NOT NULL,
+                        username VARCHAR(255),
+                        folder_name VARCHAR(255),
+                        role VARCHAR(50) DEFAULT 'user',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        is_active BOOLEAN DEFAULT TRUE
+                    )
+                    """,
+                    """
+                    CREATE TABLE IF NOT EXISTS user_categories (
+                        id SERIAL PRIMARY KEY,
+                        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                        category_name VARCHAR(255) NOT NULL,
+                        category_type VARCHAR(50) DEFAULT 'expense',
+                        color VARCHAR(7) DEFAULT '#3498db',
+                        icon VARCHAR(50),
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(user_id, category_name)
+                    )
+                    """,
+                    """
+                    CREATE TABLE IF NOT EXISTS expenses (
+                        id SERIAL PRIMARY KEY,
+                        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                        category_id INTEGER REFERENCES user_categories(id) ON DELETE SET NULL,
+                        amount DECIMAL(10,2) NOT NULL,
+                        description TEXT,
+                        date DATE NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """,
+                    """
+                    CREATE TABLE IF NOT EXISTS budget_plans (
+                        id SERIAL PRIMARY KEY,
+                        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                        plan_name VARCHAR(255) NOT NULL,
+                        total_amount DECIMAL(10,2) NOT NULL,
+                        spent_amount DECIMAL(10,2) DEFAULT 0.00,
+                        start_date DATE NOT NULL,
+                        end_date DATE NOT NULL,
+                        categories JSONB,
+                        is_active BOOLEAN DEFAULT TRUE,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """,
+                    """
+                    CREATE TABLE IF NOT EXISTS reminders (
+                        id SERIAL PRIMARY KEY,
+                        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                        title VARCHAR(255) NOT NULL,
+                        description TEXT,
+                        reminder_date DATE NOT NULL,
+                        reminder_time TIME,
+                        is_recurring BOOLEAN DEFAULT FALSE,
+                        recurring_pattern VARCHAR(50),
+                        is_completed BOOLEAN DEFAULT FALSE,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """,
+                    """
+                    CREATE TABLE IF NOT EXISTS user_settings (
+                        id SERIAL PRIMARY KEY,
+                        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                        setting_key VARCHAR(255) NOT NULL,
+                        setting_value TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(user_id, setting_key)
+                    )
+                    """
+                ]
+                
+                for table_sql in tables:
+                    cursor.execute(table_sql)
+                
+                conn.commit()
+                logger.info("Таблицы созданы/проверены")
         
-        if not user:
-            return False
-        
-        user_id = user['id']
-        
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка создания таблиц: {e}")
+        return False
+
+def migrate_user_data(user_id: int, user_folder_path: str) -> bool:
+    """Миграция данных пользователя из JSON файлов в базу данных"""
+    if not db_manager.is_available():
+        logger.warning("База данных недоступна")
+        return False
+    
+    try:
         # Мигрируем категории
         categories_file = os.path.join(user_folder_path, "user_categories.json")
         if os.path.exists(categories_file):
             with open(categories_file, 'r', encoding='utf-8') as f:
                 categories_data = json.load(f)
                 for category in categories_data:
-                    add_user_category(
+                    query = """
+                        INSERT INTO user_categories (user_id, category_name, category_type, color, icon)
+                        VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT (user_id, category_name) DO NOTHING
+                    """
+                    db_manager.execute_query(query, (
                         user_id, 
                         category['name'], 
                         category.get('type', 'expense'),
                         category.get('color', '#3498db'),
                         category.get('icon', '📦')
-                    )
+                    ))
         
         # Мигрируем расходы
         expenses_file = os.path.join(user_folder_path, "data", "expenses.json")
@@ -463,40 +561,49 @@ def migrate_user_data_from_files(user_folder_path: str, telegram_id: int) -> boo
             with open(expenses_file, 'r', encoding='utf-8') as f:
                 expenses_data = json.load(f)
                 for expense in expenses_data:
-                    # Находим категорию по имени
-                    category = get_user_categories(user_id)
-                    category_id = None
-                    for cat in category:
-                        if cat['category_name'] == expense.get('category'):
-                            category_id = cat['id']
-                            break
+                    # Находим ID категории
+                    category_query = """
+                        SELECT id FROM user_categories 
+                        WHERE user_id = %s AND category_name = %s
+                    """
+                    category_result = db_manager.execute_query(category_query, (user_id, expense['category']), fetch=True)
+                    category_id = category_result[0]['id'] if category_result else None
                     
-                    if category_id:
-                        expense_date = datetime.strptime(expense['date'], '%Y-%m-%d').date()
-                        add_expense(
-                            user_id,
-                            category_id,
-                            expense['amount'],
-                            expense.get('description'),
-                            expense_date
-                        )
+                    expense_date = datetime.strptime(expense['date'], '%Y-%m-%d').date()
+                    query = """
+                        INSERT INTO expenses (user_id, category_id, amount, description, date)
+                        VALUES (%s, %s, %s, %s, %s)
+                    """
+                    db_manager.execute_query(query, (
+                        user_id, 
+                        category_id, 
+                        expense['amount'], 
+                        expense.get('description', ''), 
+                        expense_date
+                    ))
         
         # Мигрируем планы бюджета
-        budget_plans_file = os.path.join(user_folder_path, "budget_plans.json")
-        if os.path.exists(budget_plans_file):
-            with open(budget_plans_file, 'r', encoding='utf-8') as f:
-                plans_data = json.load(f)
-                for plan in plans_data:
+        budget_file = os.path.join(user_folder_path, "budget_plans.json")
+        if os.path.exists(budget_file):
+            with open(budget_file, 'r', encoding='utf-8') as f:
+                budget_data = json.load(f)
+                for plan in budget_data:
                     start_date = datetime.strptime(plan['start_date'], '%Y-%m-%d').date()
                     end_date = datetime.strptime(plan['end_date'], '%Y-%m-%d').date()
-                    create_budget_plan(
-                        user_id,
-                        plan['name'],
-                        plan['total_amount'],
-                        start_date,
-                        end_date,
-                        plan.get('categories')
-                    )
+                    categories_json = json.dumps(plan.get('categories', []))
+                    
+                    query = """
+                        INSERT INTO budget_plans (user_id, plan_name, total_amount, start_date, end_date, categories)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                    """
+                    db_manager.execute_query(query, (
+                        user_id, 
+                        plan['name'], 
+                        plan['total_amount'], 
+                        start_date, 
+                        end_date, 
+                        categories_json
+                    ))
         
         # Мигрируем напоминания
         reminders_file = os.path.join(user_folder_path, "reminders.json")
@@ -520,29 +627,4 @@ def migrate_user_data_from_files(user_folder_path: str, telegram_id: int) -> boo
         
     except Exception as e:
         logger.error(f"Ошибка миграции данных пользователя: {e}")
-        return False
-
-def update_user_role(telegram_id: int, new_role: str) -> bool:
-    """Обновляет роль пользователя"""
-    if not db_manager.is_available():
-        logger.warning("База данных недоступна")
-        return False
-    
-    try:
-        with db_manager.get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("""
-                    UPDATE users 
-                    SET role = %s, updated_at = CURRENT_TIMESTAMP
-                    WHERE telegram_id = %s
-                """, (new_role, telegram_id))
-                
-                if cursor.rowcount > 0:
-                    logger.info(f"Роль пользователя {telegram_id} обновлена на {new_role}")
-                    return True
-                else:
-                    logger.warning(f"Пользователь {telegram_id} не найден")
-                    return False
-    except Exception as e:
-        logger.error(f"Ошибка обновления роли пользователя {telegram_id}: {e}")
         return False
