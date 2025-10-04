@@ -964,6 +964,7 @@ async def manual_training_fallback(update: Update, context: ContextTypes.DEFAULT
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Отвечает на команду /start."""
     user_id = update.effective_user.id
+    username = update.effective_user.username or update.effective_user.first_name
     
     # Проверяем, является ли пользователь администратором
     users_data = load_authorized_users()
@@ -979,19 +980,39 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     
     # Проверяем, авторизован ли пользователь
     if not is_user_authorized(user_id):
-        # Пользователь не авторизован - просим ввести username
-        await update.message.reply_text(
-            "🔐 Добро пожаловать!\n\n"
-            "Для доступа к боту необходимо ввести ваше имя.\n"
-            "👤 Введите ваше имя:",
-            reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
-        )
-        context.user_data['auth_state'] = 'waiting_for_username'
-        return
+        # Проверяем, есть ли пользователь в списке по username
+        found_user = None
+        for user in users_data.get("users", []):
+            if user.get("username") == username:
+                found_user = user
+                break
+        
+        if found_user:
+            # Пользователь найден - привязываем telegram_id
+            found_user["telegram_id"] = user_id
+            save_authorized_users(users_data)
+            logger.info(f"Пользователь '{username}' успешно авторизован с ID: {user_id}")
+            
+            await update.message.reply_text(
+                f"✅ Добро пожаловать, {username}!\n\n"
+                "Вы успешно авторизованы. Теперь у вас есть доступ к боту!",
+                reply_markup=get_main_menu_keyboard()
+            )
+            return
+        else:
+            # Пользователь не найден - просим ввести username
+            await update.message.reply_text(
+                "🔐 Добро пожаловать!\n\n"
+                "Для доступа к боту необходимо ввести ваше имя.\n"
+                "👤 Введите ваше имя:",
+                reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
+            )
+            context.user_data['auth_state'] = 'waiting_for_username'
+            return
     
     # Пользователь авторизован - показываем главное меню
     await update.message.reply_text(
-        "Привет! Я твой помощник по учету расходов. Выбери опцию ниже:",
+        f"Привет, {username}! Я твой помощник по учету расходов. Выбери опцию ниже:",
         reply_markup=get_main_menu_keyboard()
     )
 
