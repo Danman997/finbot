@@ -908,7 +908,7 @@ def get_main_menu_keyboard():
         [KeyboardButton("💸 Добавить расход"), KeyboardButton("📊 Отчеты")],
         [KeyboardButton("🔧 Исправить категории"), KeyboardButton("📚 Обучить модель")],
         [KeyboardButton("⏰ Напоминания"), KeyboardButton("📅 Планирование")],
-        [KeyboardButton("📈 Аналитика"), KeyboardButton("👥 Управление группой")]
+        [KeyboardButton("📈 Аналитика"), KeyboardButton("👥 Группы")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -1592,8 +1592,15 @@ async def group_management_menu(update: Update, context: ContextTypes.DEFAULT_TY
     # Проверяем, находится ли пользователь в группе
     if not is_user_in_group(user_id):
         await update.message.reply_text(
-            "❌ Вы не состоите ни в одной группе.",
-            reply_markup=get_main_menu_keyboard()
+            "👥 Группы\n\n"
+            "У вас пока нет групп. Вы можете:\n\n"
+            "➕ Создать новую группу\n"
+            "🔗 Присоединиться к существующей группе\n\n"
+            "Выберите действие:",
+            reply_markup=ReplyKeyboardMarkup([
+                [KeyboardButton("➕ Создать группу"), KeyboardButton("🔗 Присоединиться к группе")],
+                [KeyboardButton("🔙 Назад")]
+            ], resize_keyboard=True)
         )
         return
     
@@ -1653,8 +1660,15 @@ async def group_management_handler(update: Update, context: ContextTypes.DEFAULT
     # Проверяем, находится ли пользователь в группе
     if not is_user_in_group(user_id):
         await update.message.reply_text(
-            "❌ Вы не состоите ни в одной группе.",
-            reply_markup=get_main_menu_keyboard()
+            "👥 Группы\n\n"
+            "У вас пока нет групп. Вы можете:\n\n"
+            "➕ Создать новую группу\n"
+            "🔗 Присоединиться к существующей группе\n\n"
+            "Выберите действие:",
+            reply_markup=ReplyKeyboardMarkup([
+                [KeyboardButton("➕ Создать группу"), KeyboardButton("🔗 Присоединиться к группе")],
+                [KeyboardButton("🔙 Назад")]
+            ], resize_keyboard=True)
         )
         context.user_data.pop('group_management_state', None)
         return
@@ -2451,8 +2465,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     elif text == "📈 Аналитика":
         await analytics_menu(update, context)
         return
-    elif text == "👥 Управление группой":
+    elif text == "👥 Группы":
         await group_management_menu(update, context)
+        return
+    elif text == "➕ Создать группу":
+        await update.message.reply_text(
+            "➕ Создание группы\n\n"
+            "Введите название группы:",
+            reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+        )
+        context.user_data['group_creation_state'] = 'waiting_for_name'
+        return
+    elif text == "🔗 Присоединиться к группе":
+        await update.message.reply_text(
+            "🔗 Присоединение к группе\n\n"
+            "Введите код приглашения:",
+            reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+        )
+        context.user_data['group_join_state'] = 'waiting_for_code'
         return
     elif text == "⏰ Напоминания":
         await reminder_menu(update, context)
@@ -2508,11 +2538,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     elif text == "💸 Добавить расход":
         await update.message.reply_text(
             "💸 Для добавления расхода напишите в формате:\n\n"
-            "📝 Описание Сумма\n\n"
+            "💰 Сумма Описание\n\n"
             "Например:\n"
-            "• Обед в кафе 1500\n"
-            "• Такси домой 800\n"
-            "• Продукты 2500\n\n"
+            "• 1500 обед в кафе\n"
+            "• 800 такси домой\n"
+            "• 2500 продукты\n\n"
             "Бот автоматически определит категорию и запишет расход!",
             reply_markup=get_main_menu_keyboard()
         )
@@ -2520,19 +2550,70 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     logger.info(f"Получено сообщение: {text}")
 
-    match = re.match(r"(.+?)\s+(\d+[.,]?\d*)$", text)
-    if not match:
+    # Обработка создания группы
+    if context.user_data.get('group_creation_state') == 'waiting_for_name':
+        group_name = text.strip()
+        if len(group_name) < 2:
+            await update.message.reply_text(
+                "❌ Название группы должно содержать минимум 2 символа.\n\n"
+                "Попробуйте еще раз:",
+                reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+            )
+            return
+        
+        success, message, invitation_code = create_group(group_name, user_id)
+        if success:
+            await update.message.reply_text(
+                f"✅ Группа '{group_name}' создана!\n\n"
+                f"🔑 Код приглашения: {invitation_code}\n\n"
+                f"Поделитесь этим кодом с другими пользователями для присоединения к группе.",
+                reply_markup=get_main_menu_keyboard()
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ {message}",
+                reply_markup=get_main_menu_keyboard()
+            )
+        context.user_data.pop('group_creation_state', None)
+        return
+    
+    # Обработка присоединения к группе
+    elif context.user_data.get('group_join_state') == 'waiting_for_code':
+        invitation_code = text.strip().upper()
+        success, message = join_group_by_invitation(invitation_code, user_id, "")
+        if success:
+            await update.message.reply_text(
+                f"✅ {message}",
+                reply_markup=get_main_menu_keyboard()
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ {message}\n\n"
+                "Попробуйте еще раз:",
+                reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+            )
+            return
+        context.user_data.pop('group_join_state', None)
+        return
+
+    # Проверяем формат расхода: "Сумма Описание" или "Описание Сумма"
+    match1 = re.match(r"(\d+[.,]?\d*)\s+(.+)$", text)  # Сумма Описание
+    match2 = re.match(r"(.+?)\s+(\d+[.,]?\d*)$", text)  # Описание Сумма
+    
+    if match1:
+        amount_str, description = match1.groups()
+        amount = float(amount_str.replace(',', '.'))
+    elif match2:
+        description, amount_str = match2.groups()
+        amount = float(amount_str.replace(',', '.'))
+    else:
         await update.message.reply_text(
-            "Неверный формат. Используйте: 'Описание Сумма' (например, 'Обед в кафе 150').",
+            "Неверный формат. Используйте: 'Сумма Описание' или 'Описание Сумма' (например, '1500 обед в кафе' или 'обед в кафе 1500').",
             reply_markup=get_main_menu_keyboard()
         )
         return
     
-    description = match.group(1).strip()
-    amount_str = match.group(2).replace(',', '.')
-    
     try:
-        amount = float(amount_str)
         category = classify_expense(description, user_id)
         transaction_date = datetime.now(timezone.utc)
         if add_expense(amount, category, description, transaction_date, user_id): 
