@@ -281,24 +281,67 @@ def get_database_name(user_id: int) -> str:
         return 'postgres-_GZb'  # Обычные пользователи используют пользовательскую БД
 
 def get_user_categories(user_id: int) -> list:
-    """Получает категории пользователя из базы данных"""
+    """Получает категории пользователя из файловой системы"""
     try:
-        user = get_user_by_telegram_id(user_id)
-        if not user:
-            return []
+        import json
+        import os
         
-        from database import get_user_categories as db_get_user_categories
-        categories = db_get_user_categories(user['id'])
-        return [
-            {
-                'id': cat['id'],
-                'name': cat['category_name'],
-                'type': cat['category_type'],
-                'color': cat['color'],
-                'icon': cat['icon']
+        folder_path = get_user_folder_path(user_id)
+        categories_file = os.path.join(folder_path, "categories.json")
+        
+        if not os.path.exists(categories_file):
+            # Создаем файл с категориями по умолчанию
+            default_categories = {
+                "categories": [
+                    {
+                        "id": 1,
+                        "name": "Питание",
+                        "keywords": ["еда", "обед", "завтрак", "ужин", "кафе", "ресторан", "продукты", "магазин", "супермаркет"]
+                    },
+                    {
+                        "id": 2,
+                        "name": "Транспорт",
+                        "keywords": ["такси", "автобус", "метро", "бензин", "парковка", "транспорт", "поездка"]
+                    },
+                    {
+                        "id": 3,
+                        "name": "Развлечения",
+                        "keywords": ["кино", "театр", "игра", "развлечение", "отдых", "отпуск", "путешествие"]
+                    },
+                    {
+                        "id": 4,
+                        "name": "Здоровье",
+                        "keywords": ["врач", "лекарство", "аптека", "больница", "здоровье", "лечение"]
+                    },
+                    {
+                        "id": 5,
+                        "name": "Одежда",
+                        "keywords": ["одежда", "магазин", "покупка", "вещи", "обувь"]
+                    },
+                    {
+                        "id": 6,
+                        "name": "Коммунальные услуги",
+                        "keywords": ["электричество", "вода", "газ", "интернет", "телефон", "коммунальные", "услуги"]
+                    },
+                    {
+                        "id": 7,
+                        "name": "Прочее",
+                        "keywords": ["другое", "прочее", "прочие", "разное"]
+                    }
+                ]
             }
-            for cat in categories
-        ]
+            
+            # Создаем папку если её нет
+            os.makedirs(folder_path, exist_ok=True)
+            
+            with open(categories_file, 'w', encoding='utf-8') as f:
+                json.dump(default_categories, f, ensure_ascii=False, indent=2)
+        
+        # Читаем категории из файла
+        with open(categories_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            return data.get('categories', [])
+            
     except Exception as e:
         logger.error(f"Ошибка при получении категорий пользователя {user_id}: {e}")
         return []
