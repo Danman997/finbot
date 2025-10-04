@@ -720,7 +720,7 @@ def add_expense_old(amount, category, description, transaction_date, user_id=Non
                         expenses = list(reader)
                 
                 # Генерируем новый ID
-                new_id = max([int(exp.get('id', 0)) for exp in expenses], default=0) + 1
+                new_id = max([int(exp.get('id', 0)) for exp in expenses if exp.get('id', '').isdigit()], default=0) + 1
                 
                 # Добавляем новый расход
                 new_expense = {
@@ -2162,7 +2162,11 @@ async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
     # Создание Excel файла
     excel_buf = io.BytesIO()
-    df.to_excel(excel_buf, index=False, engine='xlsxwriter')
+    # Убираем timezone из datetime для совместимости с Excel
+    df_copy = df.copy()
+    if 'Дата' in df_copy.columns:
+        df_copy['Дата'] = df_copy['Дата'].dt.tz_localize(None)
+    df_copy.to_excel(excel_buf, index=False, engine='xlsxwriter')
     excel_buf.seek(0)
 
     # Создание отчета в зависимости от периода
