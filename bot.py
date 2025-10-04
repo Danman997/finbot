@@ -5336,7 +5336,8 @@ def get_user_folder_path(user_id: int) -> str:
         for user in users_data.get("users", []):
             if user.get("telegram_id") == user_id:
                 folder_name = user.get("folder_name", f"user_{user_id}")
-                return f"user_data/{folder_name}"
+                # Используем user_id для избежания проблем с кодировкой
+                return f"user_data/user_{user_id}"
         
         # Если пользователь не найден, создаем папку по умолчанию
         return f"user_data/user_{user_id}"
