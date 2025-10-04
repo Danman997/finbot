@@ -265,8 +265,8 @@ train_model(BASE_TRAIN)
 
 def is_legacy_user(user_id: int) -> bool:
     """Проверяет, является ли пользователь 'старым' (должен использовать PostgreSQL)"""
-    legacy_user_ids = [498410375, 651498165]
-    return user_id in legacy_user_ids
+    # Все пользователи используют файловую систему для простоты
+    return False
 
 def is_admin_user(user_id: int) -> bool:
     """Проверяет, является ли пользователь админом (доступ к БД postgres)"""
@@ -721,44 +721,10 @@ def add_expense_old(amount, category, description, transaction_date, user_id=Non
             conn.close()
 
 def add_expense(amount, category, description, transaction_date, user_id=None):
-    """Добавляет расход в базу данных (новая архитектура)"""
+    """Добавляет расход в базу данных (совместимость со старой системой)"""
     try:
-        # Убеждаемся, что пользователь существует в БД
-        if user_id:
-            user = get_user_by_telegram_id(user_id)
-            if not user:
-                # Создаем пользователя если его нет
-                create_user(user_id, f"user_{user_id}", f"user_{user_id}")
-                user = get_user_by_telegram_id(user_id)
-                if not user:
-                    logger.error(f"Не удалось создать пользователя {user_id}")
-                    return False
-        else:
-            logger.error("user_id не указан")
-            return False
-        
-        # Находим категорию по имени
-        categories = get_user_categories(user_id)
-        category_id = None
-        for cat in categories:
-            if cat['name'] == category:  # Исправлено: было 'category_name'
-                category_id = cat['id']
-                break
-        
-        if not category_id:
-            logger.error(f"Категория '{category}' не найдена для пользователя {user_id}")
-            return False
-        
-        # Добавляем расход в БД (используем функцию из database.py)
-        from database import add_expense as db_add_expense
-        success = db_add_expense(user_id, category_id, amount, description, transaction_date)
-        if success:
-            logger.info(f"Расход успешно добавлен в БД для пользователя {user_id}")
-            return True
-        else:
-            logger.error(f"Ошибка добавления расхода в БД для пользователя {user_id}")
-            return False
-            
+        # Используем старую систему для совместимости
+        return add_expense_old(amount, category, description, transaction_date, user_id)
     except Exception as e:
         logger.error(f"Ошибка при добавлении расхода: {e}")
         return False
@@ -5321,17 +5287,19 @@ def create_user_folder(username: str, folder_name: str, user_id: int) -> tuple[b
 # Функция create_user_config_files удалена - теперь используется база данных
 
 def get_user_folder_path(user_id: int) -> str:
-    """Получает информацию о пользователе из базы данных (совместимость со старым кодом)"""
+    """Получает путь к папке пользователя из authorized_users.json"""
     try:
-        user = get_user_by_telegram_id(user_id)
-        if user:
-            # Возвращаем имя папки для совместимости
-            return user.get('folder_name', f'user_{user_id}')
-        else:
-            return f"user_{user_id}"
+        users_data = load_authorized_users()
+        for user in users_data.get("users", []):
+            if user.get("telegram_id") == user_id:
+                folder_name = user.get("folder_name", f"user_{user_id}")
+                return f"user_data/{folder_name}"
+        
+        # Если пользователь не найден, создаем папку по умолчанию
+        return f"user_data/user_{user_id}"
     except Exception as e:
-        logger.error(f"Ошибка получения информации о пользователе: {e}")
-        return f"user_{user_id}"
+        logger.error(f"Ошибка получения пути к папке пользователя: {e}")
+        return f"user_data/user_{user_id}"
 
 def get_user_folder_info(username: str, user_id: int) -> dict:
     """Возвращает информацию о пользователе из базы данных"""
