@@ -2119,7 +2119,7 @@ async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
                     reader = csv.DictReader(f)
                     for row in reader:
                         transaction_date = datetime.fromisoformat(row['transaction_date'].replace('Z', '+00:00'))
-                        if start_date <= transaction_date.date() <= end_date:
+                        if start_date.date() <= transaction_date.date() <= end_date.date():
                             data.append((
                                 row['description'],
                                 row['category'],
