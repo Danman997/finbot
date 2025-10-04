@@ -1,94 +1,104 @@
--- Схема базы данных для финансового бота
--- Создание таблиц для новой архитектуры
+-- Схема базы данных для FinBot
+-- PostgreSQL
 
--- Таблица пользователей (главная "картотека")
+-- Создание расширений
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- Таблица пользователей
 CREATE TABLE IF NOT EXISTS users (
-    id SERIAL PRIMARY KEY,
-    telegram_id BIGINT UNIQUE NOT NULL,
-    username VARCHAR(255),
-    folder_name VARCHAR(255),
-    role VARCHAR(50) DEFAULT 'user',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    is_active BOOLEAN DEFAULT TRUE
-);
-
--- Таблица категорий расходов
-CREATE TABLE IF NOT EXISTS user_categories (
-    id SERIAL PRIMARY KEY,
-    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-    category_name VARCHAR(255) NOT NULL,
-    category_type VARCHAR(50) DEFAULT 'expense', -- expense, income
-    color VARCHAR(7) DEFAULT '#3498db', -- hex цвет
-    icon VARCHAR(50),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(user_id, category_name)
+    id BIGINT PRIMARY KEY,
+    username VARCHAR(255) NOT NULL,
+    phone VARCHAR(20),
+    role VARCHAR(20) DEFAULT 'user' CHECK (role IN ('user', 'admin', 'super_admin')),
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    last_activity TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    folder_name VARCHAR(255)
 );
 
 -- Таблица расходов
 CREATE TABLE IF NOT EXISTS expenses (
     id SERIAL PRIMARY KEY,
-    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-    category_id INTEGER REFERENCES user_categories(id) ON DELETE SET NULL,
-    amount DECIMAL(10,2) NOT NULL,
-    description TEXT,
-    date DATE NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    amount DECIMAL(15,2) NOT NULL CHECK (amount > 0),
+    description TEXT NOT NULL,
+    category VARCHAR(100) NOT NULL,
+    transaction_date DATE NOT NULL DEFAULT CURRENT_DATE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Таблица планов бюджета
 CREATE TABLE IF NOT EXISTS budget_plans (
     id SERIAL PRIMARY KEY,
-    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-    plan_name VARCHAR(255) NOT NULL,
-    total_amount DECIMAL(10,2) NOT NULL,
-    spent_amount DECIMAL(10,2) DEFAULT 0.00,
-    start_date DATE NOT NULL,
-    end_date DATE NOT NULL,
-    categories JSONB, -- JSON с категориями и их лимитами
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    plan_month DATE NOT NULL,
+    total_amount DECIMAL(15,2) NOT NULL CHECK (total_amount > 0),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, plan_month)
+);
+
+-- Таблица элементов планов бюджета
+CREATE TABLE IF NOT EXISTS budget_plan_items (
+    id SERIAL PRIMARY KEY,
+    plan_id INTEGER NOT NULL REFERENCES budget_plans(id) ON DELETE CASCADE,
+    category VARCHAR(100) NOT NULL,
+    amount DECIMAL(15,2) NOT NULL CHECK (amount > 0),
+    comment TEXT
 );
 
 -- Таблица напоминаний
 CREATE TABLE IF NOT EXISTS reminders (
     id SERIAL PRIMARY KEY,
-    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     title VARCHAR(255) NOT NULL,
     description TEXT,
-    reminder_date DATE NOT NULL,
-    reminder_time TIME,
-    is_recurring BOOLEAN DEFAULT FALSE,
-    recurring_pattern VARCHAR(50), -- daily, weekly, monthly
-    is_completed BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    amount DECIMAL(15,2) NOT NULL CHECK (amount > 0),
+    start_date DATE NOT NULL,
+    end_date DATE,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CHECK (end_date IS NULL OR end_date >= start_date)
 );
 
--- Таблица настроек пользователей
-CREATE TABLE IF NOT EXISTS user_settings (
+-- Таблица групп
+CREATE TABLE IF NOT EXISTS groups (
     id SERIAL PRIMARY KEY,
-    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-    setting_key VARCHAR(255) NOT NULL,
-    setting_value TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(user_id, setting_key)
+    name VARCHAR(255) NOT NULL,
+    admin_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    invitation_code VARCHAR(20) UNIQUE NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Создание индексов для оптимизации запросов
-CREATE INDEX IF NOT EXISTS idx_expenses_user_id ON expenses(user_id);
-CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date);
-CREATE INDEX IF NOT EXISTS idx_expenses_category_id ON expenses(category_id);
-CREATE INDEX IF NOT EXISTS idx_budget_plans_user_id ON budget_plans(user_id);
-CREATE INDEX IF NOT EXISTS idx_budget_plans_active ON budget_plans(is_active);
-CREATE INDEX IF NOT EXISTS idx_reminders_user_id ON reminders(user_id);
-CREATE INDEX IF NOT EXISTS idx_reminders_date ON reminders(reminder_date);
-CREATE INDEX IF NOT EXISTS idx_user_categories_user_id ON user_categories(user_id);
+-- Таблица участников групп
+CREATE TABLE IF NOT EXISTS group_members (
+    id SERIAL PRIMARY KEY,
+    group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role VARCHAR(20) DEFAULT 'member' CHECK (role IN ('member', 'admin')),
+    joined_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(group_id, user_id)
+);
 
--- Функция для автоматического обновления updated_at
+-- Индексы для оптимизации
+CREATE INDEX IF NOT EXISTS idx_expenses_user_id ON expenses(user_id);
+CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(transaction_date);
+CREATE INDEX IF NOT EXISTS idx_expenses_category ON expenses(category);
+CREATE INDEX IF NOT EXISTS idx_expenses_user_date ON expenses(user_id, transaction_date);
+
+CREATE INDEX IF NOT EXISTS idx_budget_plans_user_id ON budget_plans(user_id);
+CREATE INDEX IF NOT EXISTS idx_budget_plans_month ON budget_plans(plan_month);
+CREATE INDEX IF NOT EXISTS idx_budget_plans_user_month ON budget_plans(user_id, plan_month);
+
+CREATE INDEX IF NOT EXISTS idx_reminders_user_id ON reminders(user_id);
+CREATE INDEX IF NOT EXISTS idx_reminders_active ON reminders(is_active);
+CREATE INDEX IF NOT EXISTS idx_reminders_dates ON reminders(start_date, end_date);
+
+CREATE INDEX IF NOT EXISTS idx_group_members_group_id ON group_members(group_id);
+CREATE INDEX IF NOT EXISTS idx_group_members_user_id ON group_members(user_id);
+
+-- Триггеры для обновления updated_at
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -97,11 +107,7 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
--- Триггеры для автоматического обновления updated_at
 CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
-CREATE TRIGGER update_expenses_updated_at BEFORE UPDATE ON expenses
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 CREATE TRIGGER update_budget_plans_updated_at BEFORE UPDATE ON budget_plans
@@ -110,5 +116,13 @@ CREATE TRIGGER update_budget_plans_updated_at BEFORE UPDATE ON budget_plans
 CREATE TRIGGER update_reminders_updated_at BEFORE UPDATE ON reminders
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-CREATE TRIGGER update_user_settings_updated_at BEFORE UPDATE ON user_settings
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+-- Функция для генерации кода приглашения
+CREATE OR REPLACE FUNCTION generate_invitation_code()
+RETURNS TEXT AS $$
+BEGIN
+    RETURN upper(substring(md5(random()::text) from 1 for 8));
+END;
+$$ LANGUAGE plpgsql;
+
+-- Вставка начальных данных (опционально)
+-- INSERT INTO users (id, username, role) VALUES (1, 'admin', 'super_admin') ON CONFLICT (id) DO NOTHING;
