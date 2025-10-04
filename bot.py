@@ -2164,8 +2164,9 @@ async def period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     excel_buf = io.BytesIO()
     # Убираем timezone из datetime для совместимости с Excel
     df_copy = df.copy()
-    if 'Дата' in df_copy.columns:
-        df_copy['Дата'] = df_copy['Дата'].dt.tz_localize(None)
+    if 'Дата транзакции' in df_copy.columns:
+        # Конвертируем в строку для совместимости с Excel
+        df_copy['Дата транзакции'] = pd.to_datetime(df_copy['Дата транзакции']).dt.strftime('%Y-%m-%d %H:%M:%S')
     df_copy.to_excel(excel_buf, index=False, engine='xlsxwriter')
     excel_buf.seek(0)
 
