@@ -6,7 +6,7 @@ import logging
 import sys
 from datetime import datetime
 from typing import Optional
-from config import config
+from config.settings import settings
 
 class ColoredFormatter(logging.Formatter):
     """Цветной форматтер для консоли"""
@@ -39,7 +39,7 @@ def setup_logger(name: str = "finbot", log_file: Optional[str] = None) -> loggin
     
     # Создаем логгер
     logger = logging.getLogger(name)
-    logger.setLevel(getattr(logging, config.log_level.upper()))
+    logger.setLevel(getattr(logging, settings.logging.level.upper()))
     
     # Очищаем существующие обработчики
     logger.handlers.clear()
@@ -62,7 +62,7 @@ def setup_logger(name: str = "finbot", log_file: Optional[str] = None) -> loggin
     
     # Обработчик для консоли
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(getattr(logging, config.log_level.upper()))
+    console_handler.setLevel(getattr(logging, settings.logging.level.upper()))
     console_handler.setFormatter(console_formatter)
     logger.addHandler(console_handler)
     
