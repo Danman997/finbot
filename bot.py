@@ -790,61 +790,191 @@ def get_expense_by_id(expense_id):
     finally:
         conn.close()
 
-def update_expense_category(expense_id, new_category):
+def update_expense_category(expense_id, new_category, user_id: int = None):
     """Обновить категорию расхода"""
-    conn = get_db_connection()
-    if not conn:
-        return False
-    try:
-        cursor = conn.cursor()
-        cursor.execute('''
-            UPDATE expenses SET category = %s WHERE id = %s
-        ''', (new_category, expense_id))
-        conn.commit()
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка при обновлении категории: {e}")
-        return False
-    finally:
-        conn.close()
+    if user_id is None:
+        # Fallback к базе данных для совместимости
+        conn = get_db_connection()
+        if not conn:
+            return False
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE expenses SET category = %s WHERE id = %s
+            ''', (new_category, expense_id))
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Ошибка при обновлении категории в БД: {e}")
+            return False
+        finally:
+            conn.close()
+    else:
+        # Используем файловую систему для новых пользователей
+        try:
+            import csv
+            import os
+            
+            folder_path = get_user_folder_path(user_id)
+            expenses_file = f"{folder_path}/expenses.csv"
+            
+            if not os.path.exists(expenses_file):
+                logger.warning(f"Файл расходов не найден: {expenses_file}")
+                return False
+            
+            # Читаем все расходы
+            expenses = []
+            with open(expenses_file, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                expenses = list(reader)
+            
+            # Находим и обновляем расход с указанным ID
+            updated = False
+            for exp in expenses:
+                if int(exp.get('id', 0)) == expense_id:
+                    exp['category'] = new_category
+                    updated = True
+                    break
+            
+            if not updated:
+                logger.warning(f"Расход с ID {expense_id} не найден")
+                return False
+            
+            # Записываем обновленный список обратно в файл
+            with open(expenses_file, 'w', newline='', encoding='utf-8') as f:
+                fieldnames = ['id', 'amount', 'description', 'category', 'transaction_date']
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(expenses)
+            
+            logger.info(f"Категория расхода с ID {expense_id} успешно обновлена в файле {expenses_file}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Ошибка при обновлении категории в файле для пользователя {user_id}: {e}")
+            return False
 
-def update_expense_amount(expense_id: int, new_amount: float) -> bool:
+def update_expense_amount(expense_id: int, new_amount: float, user_id: int = None) -> bool:
     """Обновить сумму расхода"""
-    conn = get_db_connection()
-    if not conn:
-        return False
-    try:
-        cursor = conn.cursor()
-        cursor.execute('''
-            UPDATE expenses SET amount = %s WHERE id = %s
-        ''', (new_amount, expense_id))
-        conn.commit()
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка при обновлении суммы: {e}")
-        return False
-    finally:
-        conn.close()
+    if user_id is None:
+        # Fallback к базе данных для совместимости
+        conn = get_db_connection()
+        if not conn:
+            return False
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE expenses SET amount = %s WHERE id = %s
+            ''', (new_amount, expense_id))
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Ошибка при обновлении суммы в БД: {e}")
+            return False
+        finally:
+            conn.close()
+    else:
+        # Используем файловую систему для новых пользователей
+        try:
+            import csv
+            import os
+            
+            folder_path = get_user_folder_path(user_id)
+            expenses_file = f"{folder_path}/expenses.csv"
+            
+            if not os.path.exists(expenses_file):
+                logger.warning(f"Файл расходов не найден: {expenses_file}")
+                return False
+            
+            # Читаем все расходы
+            expenses = []
+            with open(expenses_file, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                expenses = list(reader)
+            
+            # Находим и обновляем расход с указанным ID
+            updated = False
+            for exp in expenses:
+                if int(exp.get('id', 0)) == expense_id:
+                    exp['amount'] = str(new_amount)
+                    updated = True
+                    break
+            
+            if not updated:
+                logger.warning(f"Расход с ID {expense_id} не найден")
+                return False
+            
+            # Записываем обновленный список обратно в файл
+            with open(expenses_file, 'w', newline='', encoding='utf-8') as f:
+                fieldnames = ['id', 'amount', 'description', 'category', 'transaction_date']
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(expenses)
+            
+            logger.info(f"Сумма расхода с ID {expense_id} успешно обновлена в файле {expenses_file}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Ошибка при обновлении суммы в файле для пользователя {user_id}: {e}")
+            return False
 
-def get_recent_expenses(limit=10):
+def get_recent_expenses(limit=10, user_id=None):
     """Получить последние расходы для исправления"""
-    conn = get_db_connection()
-    if not conn:
-        return []
-    try:
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT id, amount, description, category, transaction_date
-            FROM expenses 
-            ORDER BY transaction_date DESC 
-            LIMIT %s
-        ''', (limit,))
-        return cursor.fetchall()
-    except Exception as e:
-        logger.error(f"Ошибка при получении расходов: {e}")
-        return []
-    finally:
-        conn.close()
+    if user_id is None:
+        # Fallback к базе данных для совместимости
+        conn = get_db_connection()
+        if not conn:
+            return []
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT id, amount, description, category, transaction_date
+                FROM expenses 
+                ORDER BY transaction_date DESC 
+                LIMIT %s
+            ''', (limit,))
+            return cursor.fetchall()
+        except Exception as e:
+            logger.error(f"Ошибка при получении расходов из БД: {e}")
+            return []
+        finally:
+            conn.close()
+    else:
+        # Используем файловую систему для новых пользователей
+        try:
+            import csv
+            import os
+            from datetime import datetime
+            
+            folder_path = get_user_folder_path(user_id)
+            expenses_file = f"{folder_path}/expenses.csv"
+            
+            if not os.path.exists(expenses_file):
+                return []
+            
+            expenses = []
+            with open(expenses_file, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    try:
+                        exp_id = int(row.get('id', 0))
+                        amount = float(row.get('amount', 0))
+                        description = row.get('description', '')
+                        category = row.get('category', '')
+                        transaction_date = datetime.fromisoformat(row.get('transaction_date', '').replace('Z', '+00:00'))
+                        
+                        expenses.append((exp_id, amount, description, category, transaction_date))
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"Ошибка парсинга строки расхода: {e}")
+                        continue
+            
+            # Сортируем по дате (новые сначала) и ограничиваем количество
+            expenses.sort(key=lambda x: x[4], reverse=True)
+            return expenses[:limit]
+            
+        except Exception as e:
+            logger.error(f"Ошибка при получении расходов из файлов для пользователя {user_id}: {e}")
+            return []
 
 def get_all_expenses_for_training():
     """Получить все расходы для обучения модели"""
@@ -863,23 +993,71 @@ def get_all_expenses_for_training():
     finally:
         conn.close()
 
-def delete_expense(expense_id: int) -> bool:
+def delete_expense(expense_id: int, user_id: int = None) -> bool:
     """Удалить расход по ID"""
-    conn = get_db_connection()
-    if not conn:
-        return False
-    try:
-        cursor = conn.cursor()
-        cursor.execute('''
-            DELETE FROM expenses WHERE id = %s
-        ''', (expense_id,))
-        conn.commit()
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка при удалении расхода: {e}")
-        return False
-    finally:
-        conn.close()
+    if user_id is None:
+        # Fallback к базе данных для совместимости
+        conn = get_db_connection()
+        if not conn:
+            return False
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
+                DELETE FROM expenses WHERE id = %s
+            ''', (expense_id,))
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Ошибка при удалении расхода из БД: {e}")
+            return False
+        finally:
+            conn.close()
+    else:
+        # Используем файловую систему для новых пользователей
+        try:
+            import csv
+            import os
+            
+            folder_path = get_user_folder_path(user_id)
+            expenses_file = f"{folder_path}/expenses.csv"
+            
+            if not os.path.exists(expenses_file):
+                logger.warning(f"Файл расходов не найден: {expenses_file}")
+                return False
+            
+            # Читаем все расходы
+            expenses = []
+            with open(expenses_file, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                expenses = list(reader)
+            
+            # Находим и удаляем расход с указанным ID
+            original_count = len(expenses)
+            expenses = [exp for exp in expenses if int(exp.get('id', 0)) != expense_id]
+            
+            if len(expenses) == original_count:
+                logger.warning(f"Расход с ID {expense_id} не найден")
+                return False
+            
+            # Записываем обновленный список обратно в файл
+            with open(expenses_file, 'w', newline='', encoding='utf-8') as f:
+                if expenses:
+                    fieldnames = ['id', 'amount', 'description', 'category', 'transaction_date']
+                    writer = csv.DictWriter(f, fieldnames=fieldnames)
+                    writer.writeheader()
+                    writer.writerows(expenses)
+                else:
+                    # Если файл пустой, создаем только заголовки
+                    fieldnames = ['id', 'amount', 'description', 'category', 'transaction_date']
+                    writer = csv.DictWriter(f, fieldnames=fieldnames)
+                    writer.writeheader()
+            
+            logger.info(f"Расход с ID {expense_id} успешно удален из файла {expenses_file}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Ошибка при удалении расхода из файла для пользователя {user_id}: {e}")
+            return False
 
 
 # --- ЗАЩИТА БЛОКОВ ---
@@ -2002,7 +2180,8 @@ async def correction_menu_choice(update: Update, context: ContextTypes.DEFAULT_T
     
     if choice == "1️⃣ Исправить расход":
         # Показываем список расходов для исправления
-        expenses = get_recent_expenses(10)
+        user_id = update.effective_user.id
+        expenses = get_recent_expenses(10, user_id)
         if not expenses:
             await update.message.reply_text(
                 "Нет расходов для исправления. Сначала добавьте несколько расходов.",
@@ -2027,7 +2206,8 @@ async def correction_menu_choice(update: Update, context: ContextTypes.DEFAULT_T
         
     elif choice == "2️⃣ Удалить расход":
         # Показываем список расходов для удаления
-        expenses = get_recent_expenses(10)
+        user_id = update.effective_user.id
+        expenses = get_recent_expenses(10, user_id)
         if not expenses:
             await update.message.reply_text(
                 "Нет расходов для удаления. Сначала добавьте несколько расходов.",
@@ -2140,9 +2320,10 @@ async def category_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return ConversationHandler.END
     
     exp_id, amount, desc, old_cat, date = selected_expense
+    user_id = update.effective_user.id
     
     # Обновляем категорию в базе данных
-    if update_expense_category(exp_id, new_category):
+    if update_expense_category(exp_id, new_category, user_id):
         context.user_data['selected_expense'] = (exp_id, amount, desc, new_category, date)
         await update.message.reply_text(
             f"✅ Категория обновлена!\n\n"
@@ -2181,7 +2362,8 @@ async def amount_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
     # Обновляем сумму, если изменилась
     if abs(float(new_amount) - float(old_amount)) > 1e-9:
-        if not update_expense_amount(exp_id, new_amount):
+        user_id = update.effective_user.id
+        if not update_expense_amount(exp_id, new_amount, user_id):
             await update.message.reply_text(
                 "❌ Не удалось обновить сумму.",
                 reply_markup=get_main_menu_keyboard()
@@ -4319,9 +4501,10 @@ async def custom_category_input(update: Update, context: ContextTypes.DEFAULT_TY
             return ConversationHandler.END
         
         exp_id, amount, desc, old_cat, date = selected_expense
+        user_id = update.effective_user.id
         
         # Обновляем категорию в базе данных
-        if update_expense_category(exp_id, new_category):
+        if update_expense_category(exp_id, new_category, user_id):
             context.user_data['selected_expense'] = (exp_id, amount, desc, new_category, date)
             await update.message.reply_text(
                 f"✅ Создана новая категория '{new_category}' и применена к расходу!\n\n"
@@ -5255,9 +5438,10 @@ async def expense_delete_confirm(update: Update, context: ContextTypes.DEFAULT_T
             return ConversationHandler.END
         
         exp_id, amount, desc, cat, date = selected_expense
+        user_id = update.effective_user.id
         
         # Удаляем расход из базы данных
-        if delete_expense(exp_id):
+        if delete_expense(exp_id, user_id):
             await update.message.reply_text(
                 f"✅ Расход успешно удален!\n\n"
                 f"📝 {desc}\n"
