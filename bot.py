@@ -1314,8 +1314,8 @@ async def admin_role_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     
     # Добавляем пользователя
     logger.info(f"Попытка добавить пользователя '{username}' с папкой '{folder_name}' и ролью '{role}'")
-    # Используем временный ID 0, который будет обновлен при первом входе пользователя
-    success, message = add_authorized_user(username, 0, folder_name, role)
+    # Добавляем пользователя в authorized_users.json
+    success, message = add_user_to_authorized_list(username, folder_name, role)
     
     if success:
         logger.info(f"Пользователь '{username}' успешно добавлен")
@@ -5324,21 +5324,44 @@ def add_authorized_user(username: str, user_id: int = None, folder_name: str = N
         logger.error(f"Ошибка при добавлении пользователя: {e}")
         return False, f"Ошибка: {str(e)}"
 
-def get_authorized_users_list() -> list:
-    """Возвращает список всех авторизованных пользователей из базы данных"""
+def add_user_to_authorized_list(username: str, folder_name: str, role: str) -> tuple[bool, str]:
+    """Добавляет нового пользователя в authorized_users.json"""
     try:
-        users = get_all_users()
-        return [
-            {
-                "username": user["username"],
-                "telegram_id": user["telegram_id"],
-                "role": user["role"],
-                "folder_name": user["folder_name"],
-                "added_date": user["created_at"].isoformat(),
-                "status": "active" if user["is_active"] else "inactive"
-            }
-            for user in users
-        ]
+        users_data = load_authorized_users()
+        
+        # Проверяем, не существует ли уже пользователь с таким именем
+        for user in users_data.get("users", []):
+            if user.get("username") == username:
+                return False, f"Пользователь с именем '{username}' уже существует"
+        
+        # Создаем нового пользователя
+        new_user = {
+            "username": username,
+            "added_date": datetime.now().isoformat(),
+            "status": "active",
+            "role": role,
+            "folder_name": folder_name,
+            "telegram_id": None  # Будет установлен при первом входе
+        }
+        
+        # Добавляем пользователя в список
+        users_data["users"].append(new_user)
+        
+        # Сохраняем обновленные данные
+        save_authorized_users(users_data)
+        
+        logger.info(f"Пользователь '{username}' успешно добавлен в authorized_users.json")
+        return True, f"Пользователь '{username}' успешно добавлен"
+        
+    except Exception as e:
+        logger.error(f"Ошибка при добавлении пользователя в authorized_users.json: {e}")
+        return False, f"Ошибка: {str(e)}"
+
+def get_authorized_users_list() -> list:
+    """Возвращает список всех авторизованных пользователей из authorized_users.json"""
+    try:
+        users_data = load_authorized_users()
+        return users_data.get("users", [])
     except Exception as e:
         logger.error(f"Ошибка получения списка пользователей: {e}")
         return []
