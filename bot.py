@@ -925,8 +925,9 @@ def get_admin_menu_keyboard():
     """Клавиатура для администратора"""
     keyboard = [
         [KeyboardButton("👥 Добавить пользователя"), KeyboardButton("📋 Список пользователей")],
-        [KeyboardButton("📁 Управление папками"), KeyboardButton("🔧 Роли пользователей")],
-        [KeyboardButton("📊 Статистика системы"), KeyboardButton("🔙 Главное меню")]
+        [KeyboardButton("🗑️ Удалить пользователя"), KeyboardButton("🔧 Роли пользователей")],
+        [KeyboardButton("📁 Управление папками"), KeyboardButton("📊 Статистика системы")],
+        [KeyboardButton("🔙 Главное меню")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -1188,6 +1189,31 @@ async def admin_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         return
     
+    elif text == "🗑️ Удалить пользователя":
+        users = get_authorized_users_list()
+        if not users:
+            await update.message.reply_text(
+                "📋 Список пользователей пуст.",
+                reply_markup=get_admin_menu_keyboard()
+            )
+            return
+        
+        users_text = "🗑️ Выберите пользователя для удаления:\n\n"
+        for i, user in enumerate(users, 1):
+            username = user.get("username", "Не указано")
+            telegram_id = user.get("telegram_id", "Не привязан")
+            role = user.get("role", "user")
+            role_name = USER_ROLES.get(role, role)
+            
+            users_text += f"{i}. 👤 {username} ({role_name})\n"
+            users_text += f"   🆔 ID: {telegram_id}\n\n"
+        
+        await update.message.reply_text(
+            users_text + "Введите номер пользователя для удаления:",
+            reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+        )
+        return 'waiting_for_user_to_delete'
+    
     elif text == "📁 Управление папками":
         await admin_folder_management(update, context)
         return
@@ -1244,6 +1270,72 @@ async def admin_username_input(update: Update, context: ContextTypes.DEFAULT_TYP
     )
     
     return "waiting_folder_name"
+
+async def admin_delete_user_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Обработчик ввода номера пользователя для удаления"""
+    user_id = update.effective_user.id
+    text = update.message.text
+    
+    # Проверяем, является ли пользователь администратором
+    users_data = load_authorized_users()
+    if user_id != users_data.get("admin"):
+        await update.message.reply_text(
+            "❌ Доступ запрещен. Только администратор может использовать эту функцию.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+    
+    if text == "🔙 Назад":
+        await update.message.reply_text(
+            "Админ-меню:",
+            reply_markup=get_admin_menu_keyboard()
+        )
+        return ConversationHandler.END
+    
+    try:
+        user_number = int(text.strip())
+        users = get_authorized_users_list()
+        
+        if user_number < 1 or user_number > len(users):
+            await update.message.reply_text(
+                f"❌ Неверный номер пользователя. Введите число от 1 до {len(users)}:",
+                reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+            )
+            return 'waiting_for_user_to_delete'
+        
+        # Получаем пользователя для удаления
+        user_to_delete = users[user_number - 1]
+        username = user_to_delete.get("username")
+        telegram_id = user_to_delete.get("telegram_id")
+        
+        # Удаляем пользователя из authorized_users.json
+        success = delete_user_from_authorized_list(username)
+        
+        if success:
+            # Удаляем папку пользователя, если она существует
+            if telegram_id:
+                delete_user_folder(telegram_id)
+            
+            await update.message.reply_text(
+                f"✅ Пользователь '{username}' успешно удален!\n\n"
+                "Пользователь больше не имеет доступа к боту.",
+                reply_markup=get_admin_menu_keyboard()
+            )
+            logger.info(f"Пользователь '{username}' удален администратором {user_id}")
+        else:
+            await update.message.reply_text(
+                f"❌ Ошибка при удалении пользователя '{username}'.",
+                reply_markup=get_admin_menu_keyboard()
+            )
+        
+        return ConversationHandler.END
+        
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Пожалуйста, введите корректный номер пользователя:",
+            reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+        )
+        return 'waiting_for_user_to_delete'
 
 async def admin_back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
     """Возврат в админское меню"""
@@ -1343,7 +1435,7 @@ async def admin_role_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     return ConversationHandler.END
 
 async def admin_folder_management(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Управление папками пользователей (из базы данных)"""
+    """Управление папками пользователей (из файловой системы)"""
     user_id = update.effective_user.id
     
     # Проверяем, является ли пользователь администратором
@@ -1356,45 +1448,47 @@ async def admin_folder_management(update: Update, context: ContextTypes.DEFAULT_
         return
     
     try:
-        conn = get_db_connection()
-        if not conn:
+        import os
+        
+        # Получаем список пользователей из authorized_users.json
+        users = get_authorized_users_list()
+        
+        if not users:
             await update.message.reply_text(
-                "❌ Ошибка подключения к базе данных.",
-                reply_markup=get_admin_menu_keyboard()
-            )
-            return
-        
-        cursor = conn.cursor()
-        
-        # Получаем список всех папок пользователей из БД
-        cursor.execute('''
-            SELECT username, user_id, folder_name, role, created_at,
-                   (SELECT COUNT(*) FROM user_data WHERE user_id = uf.user_id) as data_count
-            FROM user_folders uf
-            ORDER BY created_at DESC
-        ''')
-        
-        folders = cursor.fetchall()
-        conn.close()
-        
-        if not folders:
-            await update.message.reply_text(
-                "📁 Папки пользователей не найдены в базе данных.",
+                "📁 Пользователи не найдены.",
                 reply_markup=get_admin_menu_keyboard()
             )
             return
         
         # Формируем список папок
-        folders_text = "📁 Список папок пользователей (из БД):\n\n"
-        for i, folder in enumerate(folders, 1):
-            username, user_id, folder_name, role, created_at, data_count = folder
+        folders_text = "📁 Список папок пользователей:\n\n"
+        for i, user in enumerate(users, 1):
+            username = user.get("username", "Не указано")
+            telegram_id = user.get("telegram_id")
+            folder_name = user.get("folder_name", "Не задана")
+            role = user.get("role", "user")
             role_name = USER_ROLES.get(role, role)
+            added_date = user.get("added_date", "Не указана")
+            
+            # Проверяем существование папки
+            folder_path = f"user_data/user_{telegram_id}" if telegram_id else None
+            folder_exists = os.path.exists(folder_path) if folder_path else False
+            
+            # Подсчитываем количество файлов в папке
+            file_count = 0
+            if folder_exists:
+                try:
+                    file_count = len([f for f in os.listdir(folder_path) if os.path.isfile(os.path.join(folder_path, f))])
+                except:
+                    file_count = 0
             
             folders_text += f"{i}. 👤 {username}\n"
             folders_text += f"   📁 Папка: {folder_name}\n"
             folders_text += f"   🔧 Роль: {role_name}\n"
-            folders_text += f"   📅 Создана: {created_at.strftime('%d.%m.%Y %H:%M')}\n"
-            folders_text += f"   📊 Данных: {data_count} записей\n\n"
+            folders_text += f"   📅 Добавлен: {added_date[:10]}\n"
+            folders_text += f"   🆔 Telegram ID: {telegram_id or 'Не привязан'}\n"
+            folders_text += f"   📊 Файлов: {file_count}\n"
+            folders_text += f"   ✅ Статус: {'Существует' if folder_exists else 'Не создана'}\n\n"
         
         await update.message.reply_text(
             folders_text,
@@ -1448,7 +1542,7 @@ async def admin_roles_management(update: Update, context: ContextTypes.DEFAULT_T
     )
 
 async def admin_system_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Статистика системы (из базы данных)"""
+    """Статистика системы (из файловой системы)"""
     user_id = update.effective_user.id
     
     # Проверяем, является ли пользователь администратором
@@ -1461,53 +1555,85 @@ async def admin_system_stats(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
     
     try:
-        conn = get_db_connection()
-        if not conn:
-            await update.message.reply_text(
-                "❌ Ошибка подключения к базе данных.",
-                reply_markup=get_admin_menu_keyboard()
-            )
-            return
+        import os
+        import json
+        import csv
         
-        cursor = conn.cursor()
+        # Получаем список пользователей из authorized_users.json
+        users = get_authorized_users_list()
         
         # Статистика пользователей
-        cursor.execute('SELECT COUNT(*) FROM user_folders')
-        total_folders = cursor.fetchone()[0]
-        
-        cursor.execute('SELECT COUNT(DISTINCT user_id) FROM user_folders')
-        unique_users = cursor.fetchone()[0]
+        total_users = len(users)
+        active_users = len([u for u in users if u.get("status") == "active"])
+        users_with_telegram_id = len([u for u in users if u.get("telegram_id")])
         
         # Статистика по ролям
-        cursor.execute('''
-            SELECT role, COUNT(*) 
-            FROM user_folders 
-            GROUP BY role
-        ''')
-        role_stats = dict(cursor.fetchall())
+        role_stats = {}
+        for user in users:
+            role = user.get("role", "user")
+            role_stats[role] = role_stats.get(role, 0) + 1
         
-        # Статистика данных
-        cursor.execute('SELECT COUNT(*) FROM user_data')
-        total_data_records = cursor.fetchone()[0]
+        # Статистика данных из файлов
+        total_expenses = 0
+        total_reminders = 0
+        total_budget_plans = 0
+        total_categories = 0
+        total_folders = 0
         
-        cursor.execute('SELECT COUNT(*) FROM user_backups')
-        total_backups = cursor.fetchone()[0]
-        
-        # Статистика расходов
-        cursor.execute('SELECT COUNT(*) FROM expenses')
-        total_expenses = cursor.fetchone()[0]
-        
-        # Статистика напоминаний
-        cursor.execute('SELECT COUNT(*) FROM reminders')
-        total_reminders = cursor.fetchone()[0]
-        
-        conn.close()
+        for user in users:
+            telegram_id = user.get("telegram_id")
+            if telegram_id:
+                folder_path = f"user_data/user_{telegram_id}"
+                if os.path.exists(folder_path):
+                    total_folders += 1
+                    
+                    # Подсчитываем расходы
+                    expenses_file = os.path.join(folder_path, "expenses.csv")
+                    if os.path.exists(expenses_file):
+                        try:
+                            with open(expenses_file, 'r', encoding='utf-8') as f:
+                                reader = csv.DictReader(f)
+                                total_expenses += len(list(reader))
+                        except:
+                            pass
+                    
+                    # Подсчитываем напоминания
+                    reminders_file = os.path.join(folder_path, "reminders.json")
+                    if os.path.exists(reminders_file):
+                        try:
+                            with open(reminders_file, 'r', encoding='utf-8') as f:
+                                reminders = json.load(f)
+                                total_reminders += len(reminders.get("reminders", []))
+                        except:
+                            pass
+                    
+                    # Подсчитываем планы бюджета
+                    budget_file = os.path.join(folder_path, "budget_plans.json")
+                    if os.path.exists(budget_file):
+                        try:
+                            with open(budget_file, 'r', encoding='utf-8') as f:
+                                plans = json.load(f)
+                                total_budget_plans += len(plans.get("plans", []))
+                        except:
+                            pass
+                    
+                    # Подсчитываем категории
+                    categories_file = os.path.join(folder_path, "categories.json")
+                    if os.path.exists(categories_file):
+                        try:
+                            with open(categories_file, 'r', encoding='utf-8') as f:
+                                categories = json.load(f)
+                                total_categories += len(categories.get("categories", []))
+                        except:
+                            pass
         
         # Формируем отчет
-        stats_text = "📊 Статистика системы (Railway/Cloud):\n\n"
+        stats_text = "📊 Статистика системы (Файловая система):\n\n"
         stats_text += f"👥 Пользователи:\n"
-        stats_text += f"   📈 Всего папок: {total_folders}\n"
-        stats_text += f"   👤 Уникальных пользователей: {unique_users}\n\n"
+        stats_text += f"   📈 Всего пользователей: {total_users}\n"
+        stats_text += f"   ✅ Активных: {active_users}\n"
+        stats_text += f"   🔗 С привязанным ID: {users_with_telegram_id}\n"
+        stats_text += f"   📁 Созданных папок: {total_folders}\n\n"
         
         stats_text += f"🔧 Роли:\n"
         for role, count in role_stats.items():
@@ -1515,12 +1641,12 @@ async def admin_system_stats(update: Update, context: ContextTypes.DEFAULT_TYPE)
             stats_text += f"   {role_name}: {count}\n"
         
         stats_text += f"\n📊 Данные:\n"
-        stats_text += f"   💾 Записей данных: {total_data_records}\n"
         stats_text += f"   💰 Расходов: {total_expenses}\n"
         stats_text += f"   ⏰ Напоминаний: {total_reminders}\n"
-        stats_text += f"   💾 Резервных копий: {total_backups}\n\n"
+        stats_text += f"   📅 Планов бюджета: {total_budget_plans}\n"
+        stats_text += f"   🏷️ Категорий: {total_categories}\n\n"
         
-        stats_text += f"☁️ Платформа: Railway (PostgreSQL)\n"
+        stats_text += f"💾 Хранилище: Файловая система\n"
         stats_text += f"🕐 Доступность: 24/7\n"
         
         await update.message.reply_text(
@@ -3384,6 +3510,10 @@ def main():
             ],
             'waiting_role': [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, admin_role_input),
+                MessageHandler(filters.Regex("^🔙 Назад$"), admin_back_to_menu)
+            ],
+            'waiting_for_user_to_delete': [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_delete_user_input),
                 MessageHandler(filters.Regex("^🔙 Назад$"), admin_back_to_menu)
             ]
         },
@@ -5365,6 +5495,44 @@ def get_authorized_users_list() -> list:
     except Exception as e:
         logger.error(f"Ошибка получения списка пользователей: {e}")
         return []
+
+def delete_user_from_authorized_list(username: str) -> bool:
+    """Удаляет пользователя из authorized_users.json"""
+    try:
+        users_data = load_authorized_users()
+        
+        # Находим и удаляем пользователя
+        users = users_data.get("users", [])
+        users_data["users"] = [user for user in users if user.get("username") != username]
+        
+        # Сохраняем обновленные данные
+        save_authorized_users(users_data)
+        
+        logger.info(f"Пользователь '{username}' удален из authorized_users.json")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Ошибка при удалении пользователя '{username}': {e}")
+        return False
+
+def delete_user_folder(telegram_id: int) -> bool:
+    """Удаляет папку пользователя"""
+    try:
+        import shutil
+        import os
+        
+        folder_path = f"user_data/user_{telegram_id}"
+        if os.path.exists(folder_path):
+            shutil.rmtree(folder_path)
+            logger.info(f"Папка пользователя {telegram_id} удалена: {folder_path}")
+            return True
+        else:
+            logger.info(f"Папка пользователя {telegram_id} не найдена: {folder_path}")
+            return True  # Считаем успехом, если папки нет
+            
+    except Exception as e:
+        logger.error(f"Ошибка при удалении папки пользователя {telegram_id}: {e}")
+        return False
 
 # --- ФУНКЦИИ СОЗДАНИЯ ПЕРСОНАЛЬНЫХ ПАПОК (Railway/Cloud) ---
 def create_user_folder(username: str, folder_name: str, user_id: int) -> tuple[bool, str]:
