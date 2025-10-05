@@ -2482,6 +2482,7 @@ def parse_date_period(text):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
+    text = update.message.text # Получаем текст сообщения здесь
     
     # Проверяем, находится ли пользователь в состоянии ожидания выбора
     if context.user_data.get('auth_state') == 'waiting_for_choice':
@@ -2512,7 +2513,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Проверяем, находится ли пользователь в состоянии ожидания username
     elif context.user_data.get('auth_state') == 'waiting_for_username':
         # Обрабатываем ввод username
-        text = update.message.text.strip()
+        text = text.strip()
         
         if text == "🔙 Отмена":
             await update.message.reply_text(
@@ -2542,9 +2543,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     user["telegram_id"] = user_id
                     save_authorized_users(users_data)
                     logger.info(f"Обновлен telegram_id для пользователя '{text}': {user_id}")
-                    
-                    # Обновляем данные в базе данных Railway
-                    update_user_telegram_id(text, user_id)
                     break
             
             await update.message.reply_text(

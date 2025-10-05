@@ -30,6 +30,14 @@
       "role": "user",
       "folder_name": "Тест345",
       "telegram_id": null
+    },
+    {
+      "username": "Айша1",
+      "added_date": "2025-10-05T00:00:00.000000",
+      "status": "active",
+      "role": "moderator",
+      "folder_name": "Айша",
+      "telegram_id": null
     }
   ],
   "admin": 498410375
