@@ -1009,14 +1009,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
             return
         else:
-            # Пользователь не найден - просим ввести username
+            # Пользователь не найден - предлагаем варианты
             await update.message.reply_text(
                 "🔐 Добро пожаловать!\n\n"
-                "Для доступа к боту необходимо ввести ваше имя.\n"
-                "👤 Введите ваше имя:",
-                reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
+                "Для доступа к боту выберите один из вариантов:\n\n"
+                "👤 Ввести ваше имя (если вы уже зарегистрированы)\n"
+                "🔗 Ввести код приглашения (если у вас есть код от группы)",
+                reply_markup=ReplyKeyboardMarkup([
+                    [KeyboardButton("👤 Ввести имя"), KeyboardButton("🔗 Ввести код приглашения")],
+                    [KeyboardButton("🔙 Отмена")]
+                ], resize_keyboard=True)
             )
-            context.user_data['auth_state'] = 'waiting_for_username'
+            context.user_data['auth_state'] = 'waiting_for_choice'
             return
     
     # Пользователь авторизован - показываем главное меню
@@ -1545,8 +1549,34 @@ async def auth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         context.user_data.pop('auth_state', None)
         return
     
+    # Проверяем, что пользователь находится в состоянии ожидания выбора
+    if context.user_data.get('auth_state') == 'waiting_for_choice':
+        if text == "👤 Ввести имя":
+            await update.message.reply_text(
+                "👤 Введите ваше имя:",
+                reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+            )
+            context.user_data['auth_state'] = 'waiting_for_username'
+            return
+        elif text == "🔗 Ввести код приглашения":
+            await update.message.reply_text(
+                "🔗 Введите код приглашения:",
+                reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+            )
+            context.user_data['auth_state'] = 'waiting_for_invitation_code'
+            return
+        else:
+            await update.message.reply_text(
+                "❌ Пожалуйста, выберите один из предложенных вариантов.",
+                reply_markup=ReplyKeyboardMarkup([
+                    [KeyboardButton("👤 Ввести имя"), KeyboardButton("🔗 Ввести код приглашения")],
+                    [KeyboardButton("🔙 Отмена")]
+                ], resize_keyboard=True)
+            )
+            return
+    
     # Проверяем, что пользователь находится в состоянии ожидания username
-    if context.user_data.get('auth_state') == 'waiting_for_username':
+    elif context.user_data.get('auth_state') == 'waiting_for_username':
         username = text.strip()
         
         if len(username) < 2:
@@ -1581,9 +1611,59 @@ async def auth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await update.message.reply_text(
                 "❌ Ваше имя не найдено в списке авторизованных пользователей.\n\n"
                 "Обратитесь к администратору для добавления в список:",
-                reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
+                reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
             )
             return
+    
+    # Проверяем, что пользователь находится в состоянии ожидания кода приглашения
+    elif context.user_data.get('auth_state') == 'waiting_for_invitation_code':
+        if text == "🔙 Назад":
+            await update.message.reply_text(
+                "🔐 Добро пожаловать!\n\n"
+                "Для доступа к боту выберите один из вариантов:\n\n"
+                "👤 Ввести ваше имя (если вы уже зарегистрированы)\n"
+                "🔗 Ввести код приглашения (если у вас есть код от группы)",
+                reply_markup=ReplyKeyboardMarkup([
+                    [KeyboardButton("👤 Ввести имя"), KeyboardButton("🔗 Ввести код приглашения")],
+                    [KeyboardButton("🔙 Отмена")]
+                ], resize_keyboard=True)
+            )
+            context.user_data['auth_state'] = 'waiting_for_choice'
+            return
+        
+        invitation_code = text.strip().upper()
+        success, message = join_group_by_invitation(invitation_code, user_id, "")
+        
+        if success:
+            await update.message.reply_text(
+                f"✅ {message}\n\n"
+                "Теперь у вас есть доступ к боту!",
+                reply_markup=get_main_menu_keyboard()
+            )
+            context.user_data.pop('auth_state', None)
+            return
+        else:
+            await update.message.reply_text(
+                f"❌ {message}\n\n"
+                "Попробуйте еще раз:",
+                reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+            )
+            return
+    
+    # Обработка кнопки "Назад" в состоянии ожидания username
+    elif text == "🔙 Назад" and context.user_data.get('auth_state') == 'waiting_for_username':
+        await update.message.reply_text(
+            "🔐 Добро пожаловать!\n\n"
+            "Для доступа к боту выберите один из вариантов:\n\n"
+            "👤 Ввести ваше имя (если вы уже зарегистрированы)\n"
+            "🔗 Ввести код приглашения (если у вас есть код от группы)",
+            reply_markup=ReplyKeyboardMarkup([
+                [KeyboardButton("👤 Ввести имя"), KeyboardButton("🔗 Ввести код приглашения")],
+                [KeyboardButton("🔙 Отмена")]
+            ], resize_keyboard=True)
+        )
+        context.user_data['auth_state'] = 'waiting_for_choice'
+        return
     
     # Неизвестное состояние
     await update.message.reply_text(
@@ -2403,8 +2483,34 @@ def parse_date_period(text):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     
+    # Проверяем, находится ли пользователь в состоянии ожидания выбора
+    if context.user_data.get('auth_state') == 'waiting_for_choice':
+        if text == "👤 Ввести имя":
+            await update.message.reply_text(
+                "👤 Введите ваше имя:",
+                reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+            )
+            context.user_data['auth_state'] = 'waiting_for_username'
+            return
+        elif text == "🔗 Ввести код приглашения":
+            await update.message.reply_text(
+                "🔗 Введите код приглашения:",
+                reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+            )
+            context.user_data['auth_state'] = 'waiting_for_invitation_code'
+            return
+        else:
+            await update.message.reply_text(
+                "❌ Пожалуйста, выберите один из предложенных вариантов.",
+                reply_markup=ReplyKeyboardMarkup([
+                    [KeyboardButton("👤 Ввести имя"), KeyboardButton("🔗 Ввести код приглашения")],
+                    [KeyboardButton("🔙 Отмена")]
+                ], resize_keyboard=True)
+            )
+            return
+    
     # Проверяем, находится ли пользователь в состоянии ожидания username
-    if context.user_data.get('auth_state') == 'waiting_for_username':
+    elif context.user_data.get('auth_state') == 'waiting_for_username':
         # Обрабатываем ввод username
         text = update.message.text.strip()
         
@@ -2452,9 +2558,59 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await update.message.reply_text(
                 "❌ Ваше имя не найдено в списке авторизованных пользователей.\n\n"
                 "Обратитесь к администратору для добавления в список:",
-                reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
+                reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
             )
             return
+    
+    # Проверяем, находится ли пользователь в состоянии ожидания кода приглашения
+    elif context.user_data.get('auth_state') == 'waiting_for_invitation_code':
+        if text == "🔙 Назад":
+            await update.message.reply_text(
+                "🔐 Добро пожаловать!\n\n"
+                "Для доступа к боту выберите один из вариантов:\n\n"
+                "👤 Ввести ваше имя (если вы уже зарегистрированы)\n"
+                "🔗 Ввести код приглашения (если у вас есть код от группы)",
+                reply_markup=ReplyKeyboardMarkup([
+                    [KeyboardButton("👤 Ввести имя"), KeyboardButton("🔗 Ввести код приглашения")],
+                    [KeyboardButton("🔙 Отмена")]
+                ], resize_keyboard=True)
+            )
+            context.user_data['auth_state'] = 'waiting_for_choice'
+            return
+        
+        invitation_code = text.strip().upper()
+        success, message = join_group_by_invitation(invitation_code, user_id, "")
+        
+        if success:
+            await update.message.reply_text(
+                f"✅ {message}\n\n"
+                "Теперь у вас есть доступ к боту!",
+                reply_markup=get_main_menu_keyboard()
+            )
+            context.user_data.pop('auth_state', None)
+            return
+        else:
+            await update.message.reply_text(
+                f"❌ {message}\n\n"
+                "Попробуйте еще раз:",
+                reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+            )
+            return
+    
+    # Обработка кнопки "Назад" в состоянии ожидания username
+    elif text == "🔙 Назад" and context.user_data.get('auth_state') == 'waiting_for_username':
+        await update.message.reply_text(
+            "🔐 Добро пожаловать!\n\n"
+            "Для доступа к боту выберите один из вариантов:\n\n"
+            "👤 Ввести ваше имя (если вы уже зарегистрированы)\n"
+            "🔗 Ввести код приглашения (если у вас есть код от группы)",
+            reply_markup=ReplyKeyboardMarkup([
+                [KeyboardButton("👤 Ввести имя"), KeyboardButton("🔗 Ввести код приглашения")],
+                [KeyboardButton("🔙 Отмена")]
+            ], resize_keyboard=True)
+        )
+        context.user_data['auth_state'] = 'waiting_for_choice'
+        return
     
     # Проверяем защиту блока расходов
     if not validate_block_access("expenses", user_id):
