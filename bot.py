@@ -1134,7 +1134,7 @@ async def check_folders(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Ошибка при проверке папок: {e}")
 
 # --- АДМИН-ФУНКЦИИ ---
-async def admin_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def admin_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик админ-меню"""
     user_id = update.effective_user.id
     text = update.message.text
@@ -1146,7 +1146,7 @@ async def admin_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "❌ Доступ запрещен. Только администратор может использовать эту функцию.",
             reply_markup=get_main_menu_keyboard()
         )
-        return
+        return ConversationHandler.END
     
     if text == "👥 Добавить пользователя":
         await update.message.reply_text(
@@ -1164,7 +1164,7 @@ async def admin_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 "📋 Список пользователей пуст.",
                 reply_markup=get_admin_menu_keyboard()
             )
-            return
+            return ConversationHandler.END
         
         users_text = "📋 Список авторизованных пользователей:\n\n"
         for i, user in enumerate(users, 1):
@@ -1187,7 +1187,7 @@ async def admin_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             users_text,
             reply_markup=get_admin_menu_keyboard()
         )
-        return
+        return ConversationHandler.END
     
     elif text == "🗑️ Удалить пользователя":
         users = get_authorized_users_list()
@@ -1196,7 +1196,7 @@ async def admin_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 "📋 Список пользователей пуст.",
                 reply_markup=get_admin_menu_keyboard()
             )
-            return
+            return ConversationHandler.END
         
         users_text = "🗑️ Выберите пользователя для удаления:\n\n"
         for i, user in enumerate(users, 1):
@@ -1216,22 +1216,22 @@ async def admin_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     elif text == "📁 Управление папками":
         await admin_folder_management(update, context)
-        return
+        return ConversationHandler.END
     
     elif text == "🔧 Роли пользователей":
         await admin_roles_management(update, context)
-        return
+        return ConversationHandler.END
     
     elif text == "📊 Статистика системы":
         await admin_system_stats(update, context)
-        return
+        return ConversationHandler.END
     
     elif text == "🔙 Главное меню":
         await update.message.reply_text(
             "Главное меню:",
             reply_markup=get_main_menu_keyboard()
         )
-        return
+        return ConversationHandler.END
 
 async def admin_username_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
     """Обработчик ввода имени пользователя для добавления"""
@@ -3496,7 +3496,7 @@ def main():
     # Обработчик для админ-меню
     admin_conv_handler = ConversationHandler(
         entry_points=[
-            MessageHandler(filters.Regex("^(👥 Добавить пользователя|📋 Список пользователей|📁 Управление папками|🔧 Роли пользователей|📊 Статистика системы|🔙 Главное меню)$"), 
+            MessageHandler(filters.Regex("^(👥 Добавить пользователя|📋 Список пользователей|🗑️ Удалить пользователя|📁 Управление папками|🔧 Роли пользователей|📊 Статистика системы|🔙 Главное меню)$"), 
             admin_menu_handler)
         ],
         states={
