@@ -15,9 +15,17 @@ import pandas as pd
 import json
 import secrets
 import string
+from typing import Optional, List, Dict, Any, Tuple
 
 # Импорт модуля работы с базой данных
 from database import *
+
+# Импорт новых утилит
+from config.settings import settings
+from utils.cache import cached, get_cache_stats, clear_cache
+from utils.monitoring import monitor_performance, get_metrics, get_summary
+from utils.retry import retry, circuit_breaker
+from utils.validators import Validators
 
 # Настройки matplotlib для высокого качества
 plt.rcParams['figure.dpi'] = 300
@@ -45,30 +53,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Загружаем переменные окружения из .env файла
-load_dotenv()
+# --- Настройки бота (используем новую конфигурацию) ---
+BOT_TOKEN = settings.bot.token
+DATABASE_URL = settings.get_database_url()
 
-# --- Настройки бота ---
-BOT_TOKEN = os.environ.get('BOT_TOKEN') 
-if not BOT_TOKEN:
-    logger.error("Ошибка: Токен бота не найден. Установите переменную окружения BOT_TOKEN.")
-    exit()
-
-# Получаем параметры подключения к БД из переменных окружения Railway
-DATABASE_HOST = os.environ.get('DATABASE_HOST')
-DATABASE_PORT = os.environ.get('DATABASE_PORT', '5432')
-DATABASE_NAME = os.environ.get('DATABASE_NAME')
-DATABASE_USER = os.environ.get('DATABASE_USER')
-DATABASE_PASSWORD = os.environ.get('DATABASE_PASSWORD')
-
-# Формируем DATABASE_URL для совместимости
-if all([DATABASE_HOST, DATABASE_NAME, DATABASE_USER, DATABASE_PASSWORD]):
-    DATABASE_URL = f"postgresql://{DATABASE_USER}:{DATABASE_PASSWORD}@{DATABASE_HOST}:{DATABASE_PORT}/{DATABASE_NAME}"
-    logger.info("✅ Параметры подключения к БД настроены")
-else:
-    DATABASE_URL = None
-    logger.warning("⚠️ Не все параметры подключения к БД настроены")
-    exit()
+# Совместимость со старым кодом
+DATABASE_HOST = settings.database.host
+DATABASE_PORT = settings.database.port
+DATABASE_NAME = settings.database.name
+DATABASE_USER = settings.database.user
+DATABASE_PASSWORD = settings.database.password
     
 # --- Классификация расходов: гибридный подход (словарь → фуззи → ML) ---
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -280,6 +274,8 @@ def get_database_name(user_id: int) -> str:
     else:
         return 'postgres-_GZb'  # Обычные пользователи используют пользовательскую БД
 
+@cached(ttl=300, key_prefix="categories")
+@monitor_performance
 def get_user_categories(user_id: int) -> list:
     """Получает категории пользователя из файловой системы"""
     try:
@@ -399,7 +395,7 @@ def save_user_budget_plan(user_id: int, plan_data: dict) -> bool:
         logger.error(f"Ошибка при сохранении плана бюджета пользователя {user_id}: {e}")
         return False
 
-def classify_expense(description: str, user_id: int = None) -> str:
+def classify_expense(description: str, user_id: Optional[int] = None) -> str:
     """
     Возвращает категорию для расхода.
     Порядок: словарь пользователя → глобальный словарь → фуззи → ML → 'Прочее'
@@ -440,6 +436,8 @@ def classify_expense(description: str, user_id: int = None) -> str:
         return "Прочее"
 
 # --- Функции для работы с базой данных ---
+@retry(max_attempts=3, delay=1.0, exceptions=(psycopg2.OperationalError, psycopg2.InterfaceError))
+@monitor_performance
 def get_db_connection():
     try:
         if DATABASE_URL:
@@ -654,6 +652,7 @@ def init_db():
         conn.close()
         logger.info("База данных инициализирована (все таблицы проверены/созданы).")
 
+@monitor_performance
 def add_expense_old(amount, category, description, transaction_date, user_id=None):
     if user_id:
         # Проверяем, является ли пользователь "старым" (использует PostgreSQL)
@@ -763,6 +762,7 @@ def add_expense_old(amount, category, description, transaction_date, user_id=Non
         finally:
             conn.close()
 
+@monitor_performance
 def add_expense(amount, category, description, transaction_date, user_id=None):
     """Добавляет расход в базу данных (совместимость со старой системой)"""
     try:
@@ -2584,6 +2584,50 @@ def create_year_report(df, grouped_by_category, grouped_by_month, categories, am
     
     return fig
 
+def parse_expense_input(text: str) -> Tuple[Optional[float], Optional[str]]:
+    """
+    Парсит ввод расхода с улучшенной валидацией
+    
+    Args:
+        text: Текст ввода пользователя
+        
+    Returns:
+        Tuple[amount, description] или (None, None) при ошибке
+    """
+    if not text or len(text.strip()) == 0:
+        return None, None
+    
+    # Проверяем формат расхода: "Сумма Описание" или "Описание Сумма"
+    match1 = re.match(r"(\d+[.,]?\d*)\s+(.+)$", text.strip())  # Сумма Описание
+    match2 = re.match(r"(.+?)\s+(\d+[.,]?\d*)$", text.strip())  # Описание Сумма
+    
+    try:
+        if match1:
+            amount_str, description = match1.groups()
+            amount = float(amount_str.replace(',', '.'))
+        elif match2:
+            description, amount_str = match2.groups()
+            amount = float(amount_str.replace(',', '.'))
+        else:
+            return None, None
+        
+        # Валидация суммы
+        if amount <= 0:
+            return None, None
+        
+        if amount > settings.bot.max_expense_amount:
+            return None, None
+        
+        # Валидация описания
+        description = description.strip()
+        if len(description) == 0 or len(description) > 200:
+            return None, None
+        
+        return amount, description
+        
+    except (ValueError, TypeError):
+        return None, None
+
 def parse_date_period(text):
     text_lower = text.lower()
     start_date = None
@@ -2606,120 +2650,142 @@ def parse_date_period(text):
         start_date = None
     return start_date, end_date
 
+async def handle_auth_choice(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
+    """Обрабатывает выбор способа авторизации"""
+    if text == "👤 Ввести имя":
+        await update.message.reply_text(
+            "👤 Введите ваше имя:",
+            reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+        )
+        context.user_data['auth_state'] = 'waiting_for_username'
+        return True
+    elif text == "🔗 Ввести код приглашения":
+        await update.message.reply_text(
+            "🔗 Введите код приглашения:",
+            reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+        )
+        context.user_data['auth_state'] = 'waiting_for_invitation_code'
+        return True
+    else:
+        await update.message.reply_text(
+            "❌ Пожалуйста, выберите один из предложенных вариантов.",
+            reply_markup=ReplyKeyboardMarkup([
+                [KeyboardButton("👤 Ввести имя"), KeyboardButton("🔗 Ввести код приглашения")],
+                [KeyboardButton("🔙 Отмена")]
+            ], resize_keyboard=True)
+        )
+        return True
+
+async def handle_username_input(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
+    """Обрабатывает ввод имени пользователя"""
+    if text == "🔙 Отмена":
+        await update.message.reply_text(
+            "❌ Доступ к боту отменен. Обратитесь к администратору.",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        context.user_data.pop('auth_state', None)
+        return True
+    
+    username = text.strip()
+    if len(username) < 2:
+        await update.message.reply_text(
+            "❌ Имя должно содержать минимум 2 символа.\n\n"
+            "Попробуйте еще раз:",
+            reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
+        )
+        return True
+    
+    # Проверяем, есть ли username в списке авторизованных
+    if is_username_authorized(username):
+        logger.info(f"Пользователь {update.effective_user.id} авторизован по имени '{username}'")
+        
+        # Обновляем telegram_id для этого пользователя
+        users_data = load_authorized_users()
+        for user in users_data.get("users", []):
+            if user.get("username") == username:
+                user["telegram_id"] = update.effective_user.id
+                save_authorized_users(users_data)
+                logger.info(f"Обновлен telegram_id для пользователя '{username}': {update.effective_user.id}")
+                break
+        
+        await update.message.reply_text(
+            "✅ Ваше имя найдено в списке авторизованных пользователей!\n\n"
+            "Теперь у вас есть доступ к боту!",
+            reply_markup=get_main_menu_keyboard()
+        )
+        context.user_data.pop('auth_state', None)
+        return True
+    else:
+        await update.message.reply_text(
+            "❌ Ваше имя не найдено в списке авторизованных пользователей.\n\n"
+            "Обратитесь к администратору для добавления в список:",
+            reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
+        )
+        return True
+
+async def handle_invitation_code_input(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
+    """Обрабатывает ввод кода приглашения"""
+    if text == "🔙 Назад":
+        await update.message.reply_text(
+            "🔐 Добро пожаловать!\n\n"
+            "Для доступа к боту выберите один из вариантов:\n\n"
+            "👤 Ввести ваше имя (если вы уже зарегистрированы)\n"
+            "🔗 Ввести код приглашения (если у вас есть код от группы)",
+            reply_markup=ReplyKeyboardMarkup([
+                [KeyboardButton("👤 Ввести имя"), KeyboardButton("🔗 Ввести код приглашения")],
+                [KeyboardButton("🔙 Отмена")]
+            ], resize_keyboard=True)
+        )
+        context.user_data['auth_state'] = 'waiting_for_choice'
+        return True
+    
+    invitation_code = text.strip().upper()
+    success, message = join_group_by_invitation(invitation_code, update.effective_user.id, "")
+    
+    if success:
+        await update.message.reply_text(
+            f"✅ {message}\n\n"
+            "Теперь у вас есть доступ к боту!",
+            reply_markup=get_main_menu_keyboard()
+        )
+        context.user_data.pop('auth_state', None)
+        return True
+    else:
+        await update.message.reply_text(
+            f"❌ {message}\n\n"
+            "Попробуйте еще раз:",
+            reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+        )
+        return True
+
+@monitor_performance
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     text = update.message.text # Получаем текст сообщения здесь
     
+    # Валидация входных данных
+    if not text or len(text.strip()) == 0:
+        await update.message.reply_text("❌ Пустое сообщение не может быть обработано.")
+        return
+    
+    if len(text) > 1000:  # Ограничение длины сообщения
+        await update.message.reply_text("❌ Сообщение слишком длинное. Максимум 1000 символов.")
+        return
+    
     # Проверяем, находится ли пользователь в состоянии ожидания выбора
     if context.user_data.get('auth_state') == 'waiting_for_choice':
-        if text == "👤 Ввести имя":
-            await update.message.reply_text(
-                "👤 Введите ваше имя:",
-                reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
-            )
-            context.user_data['auth_state'] = 'waiting_for_username'
-            return
-        elif text == "🔗 Ввести код приглашения":
-            await update.message.reply_text(
-                "🔗 Введите код приглашения:",
-                reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
-            )
-            context.user_data['auth_state'] = 'waiting_for_invitation_code'
-            return
-        else:
-            await update.message.reply_text(
-                "❌ Пожалуйста, выберите один из предложенных вариантов.",
-                reply_markup=ReplyKeyboardMarkup([
-                    [KeyboardButton("👤 Ввести имя"), KeyboardButton("🔗 Ввести код приглашения")],
-                    [KeyboardButton("🔙 Отмена")]
-                ], resize_keyboard=True)
-            )
-            return
+        await handle_auth_choice(update, context, text)
+        return
     
     # Проверяем, находится ли пользователь в состоянии ожидания username
     elif context.user_data.get('auth_state') == 'waiting_for_username':
-        # Обрабатываем ввод username
-        text = text.strip()
-        
-        if text == "🔙 Отмена":
-            await update.message.reply_text(
-                "❌ Доступ к боту отменен. Обратитесь к администратору.",
-                reply_markup=ReplyKeyboardRemove()
-            )
-            context.user_data.pop('auth_state', None)
-            return
-        
-        # Проверяем username
-        if len(text) < 2:
-            await update.message.reply_text(
-                "❌ Имя должно содержать минимум 2 символа.\n\n"
-                "Попробуйте еще раз:",
-                reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
-            )
-            return
-        
-        # Проверяем, есть ли username в списке авторизованных
-        if is_username_authorized(text):
-            logger.info(f"Пользователь {user_id} авторизован по имени '{text}'")
-            
-            # Обновляем telegram_id для этого пользователя
-            users_data = load_authorized_users()
-            for user in users_data.get("users", []):
-                if user.get("username") == text:
-                    user["telegram_id"] = user_id
-                    save_authorized_users(users_data)
-                    logger.info(f"Обновлен telegram_id для пользователя '{text}': {user_id}")
-                    break
-            
-            await update.message.reply_text(
-                "✅ Ваше имя найдено в списке авторизованных пользователей!\n\n"
-                "Теперь у вас есть доступ к боту!",
-                reply_markup=get_main_menu_keyboard()
-            )
-            context.user_data.pop('auth_state', None)
-            return
-        else:
-            await update.message.reply_text(
-                "❌ Ваше имя не найдено в списке авторизованных пользователей.\n\n"
-                "Обратитесь к администратору для добавления в список:",
-                reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
-            )
-            return
+        await handle_username_input(update, context, text)
+        return
     
     # Проверяем, находится ли пользователь в состоянии ожидания кода приглашения
     elif context.user_data.get('auth_state') == 'waiting_for_invitation_code':
-        if text == "🔙 Назад":
-            await update.message.reply_text(
-                "🔐 Добро пожаловать!\n\n"
-                "Для доступа к боту выберите один из вариантов:\n\n"
-                "👤 Ввести ваше имя (если вы уже зарегистрированы)\n"
-                "🔗 Ввести код приглашения (если у вас есть код от группы)",
-                reply_markup=ReplyKeyboardMarkup([
-                    [KeyboardButton("👤 Ввести имя"), KeyboardButton("🔗 Ввести код приглашения")],
-                    [KeyboardButton("🔙 Отмена")]
-                ], resize_keyboard=True)
-            )
-            context.user_data['auth_state'] = 'waiting_for_choice'
-            return
-        
-        invitation_code = text.strip().upper()
-        success, message = join_group_by_invitation(invitation_code, user_id, "")
-        
-        if success:
-            await update.message.reply_text(
-                f"✅ {message}\n\n"
-                "Теперь у вас есть доступ к боту!",
-                reply_markup=get_main_menu_keyboard()
-            )
-            context.user_data.pop('auth_state', None)
-            return
-        else:
-            await update.message.reply_text(
-                f"❌ {message}\n\n"
-                "Попробуйте еще раз:",
-                reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
-            )
-            return
+        await handle_invitation_code_input(update, context, text)
+        return
     
     # Обработка кнопки "Назад" в состоянии ожидания username
     elif text == "🔙 Назад" and context.user_data.get('auth_state') == 'waiting_for_username':
@@ -2890,19 +2956,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         context.user_data.pop('group_join_state', None)
         return
 
-    # Проверяем формат расхода: "Сумма Описание" или "Описание Сумма"
-    match1 = re.match(r"(\d+[.,]?\d*)\s+(.+)$", text)  # Сумма Описание
-    match2 = re.match(r"(.+?)\s+(\d+[.,]?\d*)$", text)  # Описание Сумма
-    
-    if match1:
-        amount_str, description = match1.groups()
-        amount = float(amount_str.replace(',', '.'))
-    elif match2:
-        description, amount_str = match2.groups()
-        amount = float(amount_str.replace(',', '.'))
-    else:
+    # Улучшенная валидация и парсинг расхода
+    amount, description = parse_expense_input(text)
+    if amount is None or description is None:
         await update.message.reply_text(
-            "Неверный формат. Используйте: 'Сумма Описание' или 'Описание Сумма' (например, '1500 обед в кафе' или 'обед в кафе 1500').",
+            "❌ Неверный формат. Используйте: 'Сумма Описание' или 'Описание Сумма'\n"
+            "Примеры: '1500 обед в кафе' или 'обед в кафе 1500'\n"
+            "Сумма должна быть положительным числом.",
             reply_markup=get_main_menu_keyboard()
         )
         return
@@ -5289,6 +5349,8 @@ USER_ROLES = {
     "user": "Пользователь"
 }
 
+@cached(ttl=60, key_prefix="users")
+@monitor_performance
 def load_authorized_users():
     """Загружает список авторизованных пользователей из файла"""
     try:
