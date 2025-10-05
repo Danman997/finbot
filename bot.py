@@ -25,7 +25,7 @@ from config.settings import settings
 from utils.cache import cached, get_cache_stats, clear_cache
 from utils.monitoring import monitor_performance, get_metrics, get_summary
 from utils.retry import retry, circuit_breaker
-from utils.validators import Validators
+# from utils.validators import Validator  # Не используется в текущей версии
 
 # Настройки matplotlib для высокого качества
 plt.rcParams['figure.dpi'] = 300
