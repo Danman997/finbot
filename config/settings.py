@@ -51,8 +51,7 @@ class BotConfig:
         errors = []
         if not self.token:
             errors.append("BOT_TOKEN is required")
-        if self.admin_id <= 0:
-            errors.append("ADMIN_ID must be a positive integer")
+        # ADMIN_ID может быть 0 - будет загружен из authorized_users.json
         if self.max_users_per_group <= 0:
             errors.append("max_users_per_group must be positive")
         return errors
@@ -77,9 +76,28 @@ class Settings:
     """Основные настройки приложения"""
     
     def __init__(self):
+        # Получаем admin_id из переменных окружения или из authorized_users.json
+        admin_id = 0
+        try:
+            admin_id = int(os.environ.get('ADMIN_ID', '0'))
+        except (ValueError, TypeError):
+            admin_id = 0
+        
+        # Если admin_id не задан, пытаемся загрузить из authorized_users.json
+        if admin_id <= 0:
+            try:
+                import json
+                users_file = os.path.join(os.path.dirname(__file__), '..', 'authorized_users.json')
+                if os.path.exists(users_file):
+                    with open(users_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        admin_id = data.get('admin', 0)
+            except Exception:
+                admin_id = 0
+        
         self.bot = BotConfig(
             token=os.environ.get('BOT_TOKEN', ''),
-            admin_id=int(os.environ.get('ADMIN_ID', os.environ.get('admin', '0')))
+            admin_id=admin_id
         )
         
         self.database = DatabaseConfig(
@@ -124,6 +142,19 @@ class Settings:
     
     def is_admin(self, user_id: int) -> bool:
         """Проверяет, является ли пользователь администратором"""
+        # Если admin_id не задан в конфигурации, загружаем из authorized_users.json
+        if self.bot.admin_id <= 0:
+            try:
+                import json
+                import os
+                users_file = os.path.join(os.path.dirname(__file__), '..', 'authorized_users.json')
+                if os.path.exists(users_file):
+                    with open(users_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        admin_id = data.get('admin', 0)
+                        return user_id == admin_id
+            except Exception:
+                pass
         return user_id == self.bot.admin_id
 
 # Глобальный экземпляр настроек
