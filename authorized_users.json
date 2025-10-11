@@ -38,6 +38,22 @@
       "role": "moderator",
       "folder_name": "Айша",
       "telegram_id": null
+    },
+    {
+      "username": "User_7109488351",
+      "added_date": "2025-10-11T17:11:20.000000",
+      "status": "active",
+      "role": "user",
+      "folder_name": "group_member",
+      "telegram_id": 7109488351
+    },
+    {
+      "username": "User_651498165",
+      "added_date": "2025-10-06T12:00:00.000000",
+      "status": "active",
+      "role": "user",
+      "folder_name": "group_member",
+      "telegram_id": 651498165
     }
   ],
   "admin": 498410375
