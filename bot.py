@@ -2105,7 +2105,7 @@ async def group_management_handler(update: Update, context: ContextTypes.DEFAULT
         members_text = f"👥 Участники группы '{group_info['name']}':\n\n"
         for i, member in enumerate(members, 1):
             role_emoji = "👑" if member["role"] == "admin" else "👤"
-            members_text += f"{i}. {role_emoji} {member['phone']}\n"
+            members_text += f"{i}. {role_emoji} User_{member['user_id']}\n"
             members_text += f"   🆔 ID: {member['user_id']}\n"
             members_text += f"   📅 Присоединился: {member['joined_at'].strftime('%d.%m.%Y') if member['joined_at'] else 'Неизвестно'}\n\n"
         
@@ -6183,9 +6183,9 @@ def create_group(name: str, admin_user_id: int) -> tuple[bool, str, str]:
         
         # Добавляем админа как участника группы
         cursor.execute('''
-            INSERT INTO group_members (group_id, user_id, phone, role)
-            VALUES (%s, %s, %s, %s)
-        ''', (group_id, admin_user_id, "admin", "admin"))
+            INSERT INTO group_members (group_id, user_id, role)
+            VALUES (%s, %s, %s)
+        ''', (group_id, admin_user_id, "admin"))
         
         conn.commit()
         conn.close()
@@ -6279,9 +6279,9 @@ def join_group_by_invitation(invitation_code: str, user_id: int, phone: str) -> 
         
         # Добавляем пользователя в группу
         cursor.execute('''
-            INSERT INTO group_members (group_id, user_id, phone, role)
-            VALUES (%s, %s, %s, %s)
-        ''', (group_id, user_id, phone, "member"))
+            INSERT INTO group_members (group_id, user_id, role)
+            VALUES (%s, %s, %s)
+        ''', (group_id, user_id, "member"))
         
         conn.commit()
         conn.close()
@@ -6338,7 +6338,7 @@ def get_group_members(group_id: int) -> list:
         
         cursor = conn.cursor()
         cursor.execute('''
-            SELECT gm.user_id, gm.phone, gm.role, gm.joined_at
+            SELECT gm.user_id, gm.role, gm.joined_at
             FROM group_members gm
             WHERE gm.group_id = %s
             ORDER BY gm.joined_at
@@ -6348,9 +6348,8 @@ def get_group_members(group_id: int) -> list:
         for row in cursor.fetchall():
             members.append({
                 "user_id": row[0],
-                "phone": row[1],
-                "role": row[2],
-                "joined_at": row[3]
+                "role": row[1],
+                "joined_at": row[2]
             })
         
         conn.close()
