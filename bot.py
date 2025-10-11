@@ -691,20 +691,29 @@ def add_expense_old(amount, category, description, transaction_date, user_id=Non
                     
                 if not os.path.exists(folder_path):
                     logger.warning(f"Папка пользователя {user_id} не существует: {folder_path}. Создаем...")
-                    # Пытаемся создать папку для пользователя
+                    # Пытаемся создать папку для пользователя или группы
                     try:
-                        create_user_folder(user_id, f"user_{user_id}")
-                        folder_path = get_user_folder_path(user_id)
-                        if not os.path.exists(folder_path):
-                            # Создаем папку вручную
+                        # Проверяем, состоит ли пользователь в группе
+                        group_info = get_user_group(user_id)
+                        if group_info:
+                            # Создаем папку группы
                             os.makedirs(folder_path, exist_ok=True)
-                            # Создаем файл расходов
-                            expenses_file = f"{folder_path}/expenses.csv"
-                            with open(expenses_file, 'w', newline='', encoding='utf-8') as f:
-                                fieldnames = ['id', 'amount', 'description', 'category', 'transaction_date']
-                                writer = csv.DictWriter(f, fieldnames=fieldnames)
-                                writer.writeheader()
-                            logger.info(f"Создана папка и файл расходов для пользователя {user_id}")
+                            create_default_group_files(folder_path)
+                            logger.info(f"Создана папка группы: {folder_path}")
+                        else:
+                            # Создаем папку пользователя
+                            create_user_folder(user_id, f"user_{user_id}")
+                            folder_path = get_user_folder_path(user_id)
+                            if not os.path.exists(folder_path):
+                                # Создаем папку вручную
+                                os.makedirs(folder_path, exist_ok=True)
+                                # Создаем файл расходов
+                                expenses_file = f"{folder_path}/expenses.csv"
+                                with open(expenses_file, 'w', newline='', encoding='utf-8') as f:
+                                    fieldnames = ['id', 'amount', 'description', 'category', 'transaction_date']
+                                    writer = csv.DictWriter(f, fieldnames=fieldnames)
+                                    writer.writeheader()
+                                logger.info(f"Создана папка и файл расходов для пользователя {user_id}")
                     except Exception as e:
                         logger.error(f"Ошибка при создании папки для пользователя {user_id}: {e}")
                         return False
@@ -5646,7 +5655,6 @@ def is_user_authorized(user_id: int) -> bool:
     users_data = load_authorized_users()
     
     logger.info(f"Проверка авторизации для user_id: {user_id}")
-    logger.info(f"Данные пользователей: {users_data}")
     
     # Проверяем, является ли пользователь админом
     if user_id == users_data.get("admin"):
@@ -5658,6 +5666,11 @@ def is_user_authorized(user_id: int) -> bool:
         if user.get("telegram_id") == user_id:
             logger.info(f"Пользователь {user_id} найден в списке авторизованных")
             return True
+    
+    # Проверяем, состоит ли пользователь в какой-либо группе
+    if is_user_in_group(user_id):
+        logger.info(f"Пользователь {user_id} состоит в группе - авторизован")
+        return True
     
     logger.info(f"Пользователь {user_id} не авторизован")
     return False
@@ -5942,8 +5955,17 @@ def create_user_folder(username: str, folder_name: str, user_id: int) -> tuple[b
 # Функция create_user_config_files удалена - теперь используется база данных
 
 def get_user_folder_path(user_id: int) -> str:
-    """Получает путь к папке пользователя из authorized_users.json"""
+    """Получает путь к папке пользователя или группы"""
     try:
+        # Сначала проверяем, состоит ли пользователь в группе
+        group_info = get_user_group(user_id)
+        if group_info:
+            # Пользователь состоит в группе - используем папку группы
+            group_folder = f"group_data/group_{group_info['id']}"
+            logger.info(f"Пользователь {user_id} использует папку группы: {group_folder}")
+            return group_folder
+        
+        # Если не в группе, проверяем авторизованных пользователей
         users_data = load_authorized_users()
         for user in users_data.get("users", []):
             if user.get("telegram_id") == user_id:
@@ -6190,6 +6212,19 @@ def create_group(name: str, admin_user_id: int) -> tuple[bool, str, str]:
         conn.commit()
         conn.close()
         
+        # Создаем папку для группы
+        try:
+            import os
+            group_folder = f"group_data/group_{group_id}"
+            os.makedirs(group_folder, exist_ok=True)
+            
+            # Создаем файлы по умолчанию для группы
+            create_default_group_files(group_folder)
+            
+            logger.info(f"Создана папка группы: {group_folder}")
+        except Exception as e:
+            logger.error(f"Ошибка при создании папки группы: {e}")
+        
         logger.info(f"Группа '{name}' создана с ID {group_id}, пользователь {admin_user_id} добавлен как админ")
         
         return True, f"Группа '{name}' успешно создана", invitation_code
@@ -6200,6 +6235,84 @@ def create_group(name: str, admin_user_id: int) -> tuple[bool, str, str]:
             conn.rollback()
             conn.close()
         return False, f"Ошибка при создании группы: {str(e)}", ""
+
+def create_default_group_files(group_folder: str):
+    """Создает файлы по умолчанию для группы"""
+    try:
+        import json
+        import csv
+        
+        # Создаем файл расходов
+        expenses_file = os.path.join(group_folder, "expenses.csv")
+        if not os.path.exists(expenses_file):
+            with open(expenses_file, 'w', newline='', encoding='utf-8') as f:
+                fieldnames = ['id', 'amount', 'description', 'category', 'transaction_date']
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+        
+        # Создаем файл категорий
+        categories_file = os.path.join(group_folder, "categories.json")
+        if not os.path.exists(categories_file):
+            default_categories = {
+                "categories": [
+                    {
+                        "id": 1,
+                        "name": "Питание",
+                        "keywords": ["еда", "обед", "завтрак", "ужин", "кафе", "ресторан", "продукты", "магазин", "супермаркет", "хлеб"]
+                    },
+                    {
+                        "id": 2,
+                        "name": "Транспорт",
+                        "keywords": ["такси", "автобус", "метро", "бензин", "парковка", "транспорт", "поездка"]
+                    },
+                    {
+                        "id": 3,
+                        "name": "Развлечения",
+                        "keywords": ["кино", "театр", "игра", "развлечение", "отдых", "отпуск", "путешествие"]
+                    },
+                    {
+                        "id": 4,
+                        "name": "Здоровье",
+                        "keywords": ["врач", "лекарство", "аптека", "больница", "здоровье", "лечение"]
+                    },
+                    {
+                        "id": 5,
+                        "name": "Одежда",
+                        "keywords": ["одежда", "магазин", "покупка", "вещи", "обувь"]
+                    },
+                    {
+                        "id": 6,
+                        "name": "Коммунальные услуги",
+                        "keywords": ["электричество", "вода", "газ", "интернет", "телефон", "коммунальные", "услуги"]
+                    },
+                    {
+                        "id": 7,
+                        "name": "Прочее",
+                        "keywords": ["другое", "прочее", "прочие", "разное", "подарок"]
+                    }
+                ]
+            }
+            with open(categories_file, 'w', encoding='utf-8') as f:
+                json.dump(default_categories, f, ensure_ascii=False, indent=2)
+        
+        # Создаем файл напоминаний
+        reminders_file = os.path.join(group_folder, "reminders.json")
+        if not os.path.exists(reminders_file):
+            default_reminders = {"reminders": []}
+            with open(reminders_file, 'w', encoding='utf-8') as f:
+                json.dump(default_reminders, f, ensure_ascii=False, indent=2)
+        
+        # Создаем файл планов бюджета
+        budget_file = os.path.join(group_folder, "budget_plans.json")
+        if not os.path.exists(budget_file):
+            default_budget = {"plans": []}
+            with open(budget_file, 'w', encoding='utf-8') as f:
+                json.dump(default_budget, f, ensure_ascii=False, indent=2)
+        
+        logger.info(f"Созданы файлы по умолчанию для группы в папке: {group_folder}")
+        
+    except Exception as e:
+        logger.error(f"Ошибка при создании файлов по умолчанию для группы: {e}")
 
 def get_user_group(user_id: int) -> dict:
     """Получает информацию о группе пользователя"""
@@ -6286,34 +6399,18 @@ def join_group_by_invitation(invitation_code: str, user_id: int, phone: str) -> 
         conn.commit()
         conn.close()
         
-        # Добавляем пользователя в authorized_users.json для доступа к функциям бота
+        # Убеждаемся, что папка группы существует
         try:
-            users_data = load_authorized_users()
-            
-            # Проверяем, есть ли уже пользователь в списке
-            user_exists = False
-            for user in users_data.get("users", []):
-                if user.get("telegram_id") == user_id:
-                    user_exists = True
-                    break
-            
-            # Если пользователя нет, добавляем его
-            if not user_exists:
-                new_user = {
-                    "username": f"User_{user_id}",
-                    "added_date": datetime.now().isoformat(),
-                    "status": "active",
-                    "role": "user",
-                    "folder_name": f"user_{user_id}",
-                    "telegram_id": user_id
-                }
-                users_data["users"].append(new_user)
-                save_authorized_users(users_data)
-                logger.info(f"Пользователь {user_id} добавлен в authorized_users.json")
-            
+            import os
+            group_folder = f"group_data/group_{group_id}"
+            if not os.path.exists(group_folder):
+                os.makedirs(group_folder, exist_ok=True)
+                create_default_group_files(group_folder)
+                logger.info(f"Создана папка группы при присоединении: {group_folder}")
         except Exception as e:
-            logger.error(f"Ошибка при добавлении пользователя в authorized_users.json: {e}")
+            logger.error(f"Ошибка при создании папки группы: {e}")
         
+        logger.info(f"Пользователь {user_id} успешно присоединился к группе '{group_name}' (ID: {group_id})")
         return True, f"Вы успешно присоединились к группе '{group_name}'"
         
     except Exception as e:
