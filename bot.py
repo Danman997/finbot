@@ -6889,6 +6889,37 @@ def remove_group_member_file_fallback(user_id: int) -> tuple[bool, str]:
         logger.error(f"Ошибка в fallback функции удаления участника группы: {e}")
         return False, f"Ошибка при удалении: {e}"
 
+
+def remove_user_from_database(user_id: int) -> tuple[bool, str]:
+    """Удаляет пользователя из базы данных PostgreSQL"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return False, "Ошибка подключения к базе данных"
+        
+        cursor = conn.cursor()
+        
+        # Удаляем из таблицы group_members
+        cursor.execute('DELETE FROM group_members WHERE user_id = %s', (user_id,))
+        deleted_groups = cursor.rowcount
+        
+        # Удаляем из таблицы users
+        cursor.execute('DELETE FROM users WHERE id = %s', (user_id,))
+        deleted_users = cursor.rowcount
+        
+        conn.commit()
+        conn.close()
+        
+        logger.info(f"Пользователь {user_id} удален из БД: groups={deleted_groups}, users={deleted_users}")
+        return True, f"Пользователь удален из базы данных"
+        
+    except Exception as e:
+        logger.error(f"Ошибка при удалении пользователя из БД: {e}")
+        if conn:
+            conn.rollback()
+            conn.close()
+        return False, f"Ошибка при удалении из БД: {e}"
+
 # Обновляем функцию проверки доступа
 def validate_block_access(block_name: str, user_id: int) -> bool:
     """Проверяет доступ пользователя к блоку"""
