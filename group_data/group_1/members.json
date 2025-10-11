@@ -1,0 +1,15 @@
+{
+  "members": [
+    {
+      "user_id": 498410375,
+      "role": "admin",
+      "joined_at": "2025-10-11T17:00:00.000000"
+    },
+    {
+      "user_id": 7109488351,
+      "role": "member",
+      "joined_at": "2025-10-11T17:11:20.000000",
+      "invitation_code": "AXVY1B4Y"
+    }
+  ]
+}
