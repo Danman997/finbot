@@ -6215,13 +6215,50 @@ def create_group(name: str, admin_user_id: int) -> tuple[bool, str, str]:
         # Создаем папку для группы
         try:
             import os
+            import json
             group_folder = f"group_data/group_{group_id}"
             os.makedirs(group_folder, exist_ok=True)
             
             # Создаем файлы по умолчанию для группы
             create_default_group_files(group_folder)
             
+            # Создаем реестр групп в файловой системе
+            groups_registry_file = "group_data/groups_registry.json"
+            groups_registry = {"groups": []}
+            
+            if os.path.exists(groups_registry_file):
+                with open(groups_registry_file, 'r', encoding='utf-8') as f:
+                    groups_registry = json.load(f)
+            
+            # Добавляем новую группу в реестр
+            new_group = {
+                "id": group_id,
+                "name": name,
+                "admin_user_id": admin_user_id,
+                "invitation_code": invitation_code,
+                "created_at": datetime.now().isoformat()
+            }
+            groups_registry["groups"].append(new_group)
+            
+            with open(groups_registry_file, 'w', encoding='utf-8') as f:
+                json.dump(groups_registry, f, ensure_ascii=False, indent=2)
+            
+            # Создаем файл участников группы
+            members_file = os.path.join(group_folder, "members.json")
+            members_data = {
+                "members": [
+                    {
+                        "user_id": admin_user_id,
+                        "role": "admin",
+                        "joined_at": datetime.now().isoformat()
+                    }
+                ]
+            }
+            with open(members_file, 'w', encoding='utf-8') as f:
+                json.dump(members_data, f, ensure_ascii=False, indent=2)
+            
             logger.info(f"Создана папка группы: {group_folder}")
+            logger.info(f"Добавлена группа в реестр: {new_group}")
         except Exception as e:
             logger.error(f"Ошибка при создании папки группы: {e}")
         
@@ -6378,11 +6415,29 @@ def get_user_group_file_fallback(user_id: int) -> dict:
                         for member in members_data.get("members", []):
                             if member.get("user_id") == user_id:
                                 group_id = int(item.replace("group_", ""))
+                                
+                                # Получаем информацию о группе из реестра
+                                groups_registry_file = "group_data/groups_registry.json"
+                                group_name = f"Group {group_id}"  # По умолчанию
+                                admin_user_id = user_id
+                                invitation_code = member.get("invitation_code", "")
+                                
+                                if os.path.exists(groups_registry_file):
+                                    with open(groups_registry_file, 'r', encoding='utf-8') as f:
+                                        groups_registry = json.load(f)
+                                    
+                                    for group in groups_registry.get("groups", []):
+                                        if group.get("id") == group_id:
+                                            group_name = group.get("name", group_name)
+                                            admin_user_id = group.get("admin_user_id", admin_user_id)
+                                            invitation_code = group.get("invitation_code", invitation_code)
+                                            break
+                                
                                 group_info = {
                                     "id": group_id,
-                                    "name": f"Group {group_id}",
-                                    "admin_user_id": user_id,  # Для простоты
-                                    "invitation_code": member.get("invitation_code", ""),
+                                    "name": group_name,
+                                    "admin_user_id": admin_user_id,
+                                    "invitation_code": invitation_code,
                                     "role": member.get("role", "member")
                                 }
                                 logger.info(f"Fallback: найдена группа для пользователя {user_id}: {group_info}")
@@ -6506,38 +6561,68 @@ def join_group_by_invitation_file_fallback(invitation_code: str, user_id: int, p
     try:
         logger.info(f"Fallback: присоединение к группе через файловую систему, user_id={user_id}, код={invitation_code}")
         
-        # Создаем простую группу по умолчанию для демонстрации
-        # В реальном приложении здесь должна быть логика поиска группы по коду
-        group_id = 1  # Используем ID группы по умолчанию
-        group_name = "Default Group"
-        
-        # Создаем папку группы
         import os
-        group_folder = f"group_data/group_{group_id}"
-        os.makedirs(group_folder, exist_ok=True)
+        import json
         
-        # Создаем файлы по умолчанию
-        create_default_group_files(group_folder)
+        # Сначала пробуем найти группу по коду в файловой системе
+        groups_registry_file = "group_data/groups_registry.json"
         
-        # Создаем простой файл участников группы
-        members_file = os.path.join(group_folder, "members.json")
-        members_data = {
-            "members": [
-                {
+        if os.path.exists(groups_registry_file):
+            # Читаем реестр групп
+            with open(groups_registry_file, 'r', encoding='utf-8') as f:
+                groups_registry = json.load(f)
+            
+            # Ищем группу по коду приглашения
+            group_info = None
+            for group in groups_registry.get("groups", []):
+                if group.get("invitation_code") == invitation_code:
+                    group_info = group
+                    break
+            
+            if group_info:
+                group_id = group_info["id"]
+                group_name = group_info["name"]
+                
+                # Проверяем количество участников
+                group_folder = f"group_data/group_{group_id}"
+                members_file = os.path.join(group_folder, "members.json")
+                
+                existing_members = []
+                if os.path.exists(members_file):
+                    with open(members_file, 'r', encoding='utf-8') as f:
+                        existing_members = json.load(f).get("members", [])
+                
+                if len(existing_members) >= 5:
+                    return False, f"Группа '{group_name}' уже заполнена (максимум 5 участников)"
+                
+                # Проверяем, не является ли пользователь уже участником
+                for member in existing_members:
+                    if member.get("user_id") == user_id:
+                        return False, "Вы уже являетесь участником этой группы"
+                
+                # Добавляем пользователя в группу
+                new_member = {
                     "user_id": user_id,
                     "role": "member",
                     "joined_at": datetime.now().isoformat(),
                     "invitation_code": invitation_code
                 }
-            ]
-        }
+                existing_members.append(new_member)
+                
+                # Создаем папку группы, если не существует
+                os.makedirs(group_folder, exist_ok=True)
+                create_default_group_files(group_folder)
+                
+                # Обновляем файл участников
+                members_data = {"members": existing_members}
+                with open(members_file, 'w', encoding='utf-8') as f:
+                    json.dump(members_data, f, ensure_ascii=False, indent=2)
+                
+                logger.info(f"Fallback: пользователь {user_id} добавлен в группу '{group_name}' (ID: {group_id})")
+                return True, f"Вы успешно присоединились к группе '{group_name}' (режим совместимости)"
         
-        import json
-        with open(members_file, 'w', encoding='utf-8') as f:
-            json.dump(members_data, f, ensure_ascii=False, indent=2)
-        
-        logger.info(f"Fallback: пользователь {user_id} добавлен в группу {group_name} (ID: {group_id})")
-        return True, f"Вы успешно присоединились к группе '{group_name}' (режим совместимости)"
+        # Если группа не найдена, возвращаем ошибку
+        return False, "Неверный код приглашения"
         
     except Exception as e:
         logger.error(f"Ошибка в fallback функции: {e}")
