@@ -2014,20 +2014,23 @@ async def group_management_menu(update: Update, context: ContextTypes.DEFAULT_TY
         )
         return
     
-    # Проверяем, является ли пользователь админом группы
-    is_group_admin = group_info["admin_user_id"] == user_id
+    # Проверяем роль пользователя в группе
+    user_role = group_info.get("role", "member")
+    can_manage_members = user_role in ["admin", "moderator"]
     
-    if is_group_admin:
-        # Меню для админа группы
+    if can_manage_members:
+        # Меню для админа/модератора группы
         keyboard = [
             [KeyboardButton("👥 Участники группы"), KeyboardButton("🔑 Код приглашения")],
-            [KeyboardButton("📊 Статистика группы"), KeyboardButton("🔙 Главное меню")]
+            [KeyboardButton("🗑️ Удалить участника группы"), KeyboardButton("📊 Статистика группы")],
+            [KeyboardButton("🔙 Главное меню")]
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         
+        role_text = "администратором" if user_role == "admin" else "модератором"
         await update.message.reply_text(
             f"👥 Управление группой '{group_info['name']}'\n\n"
-            "Вы являетесь администратором этой группы.\n\n"
+            f"Вы являетесь {role_text} этой группы.\n\n"
             "Выберите действие:",
             reply_markup=reply_markup
         )
@@ -2100,7 +2103,9 @@ async def group_management_handler(update: Update, context: ContextTypes.DEFAULT
         context.user_data.pop('group_management_state', None)
         return
     
-    is_group_admin = group_info["admin_user_id"] == user_id
+    # Проверяем роль пользователя в группе
+    user_role = group_info.get("role", "member")
+    can_manage_members = user_role in ["admin", "moderator"]
     
     if text == "👥 Участники группы":
         members = get_group_members(group_info["id"])
@@ -2125,7 +2130,7 @@ async def group_management_handler(update: Update, context: ContextTypes.DEFAULT
         context.user_data.pop('group_management_state', None)
         return
     
-    elif text == "🔑 Код приглашения" and is_group_admin:
+    elif text == "🔑 Код приглашения" and can_manage_members:
         await update.message.reply_text(
             f"🔑 Код приглашения для группы '{group_info['name']}':\n\n"
             f"📱 {group_info['invitation_code']}\n\n"
@@ -2136,7 +2141,7 @@ async def group_management_handler(update: Update, context: ContextTypes.DEFAULT
         context.user_data.pop('group_management_state', None)
         return
     
-    elif text == "📊 Статистика группы" and is_group_admin:
+    elif text == "📊 Статистика группы" and can_manage_members:
         # Здесь можно добавить статистику по группе
         await update.message.reply_text(
             f"📊 Статистика группы '{group_info['name']}'\n\n"
@@ -2144,6 +2149,43 @@ async def group_management_handler(update: Update, context: ContextTypes.DEFAULT
             reply_markup=get_main_menu_keyboard()
         )
         context.user_data.pop('group_management_state', None)
+        return
+    
+    elif text == "🗑️ Удалить участника группы" and can_manage_members:
+        members = get_group_members(group_info["id"])
+        if not members:
+            await update.message.reply_text(
+                "❌ Ошибка при получении списка участников.",
+                reply_markup=get_main_menu_keyboard()
+            )
+            return
+        
+        # Не позволяем удалять самого себя
+        available_members = [m for m in members if m["user_id"] != user_id]
+        if not available_members:
+            await update.message.reply_text(
+                "❌ Нельзя удалить последнего участника группы.",
+                reply_markup=get_main_menu_keyboard()
+            )
+            return
+        
+        members_text = "🗑️ Выберите участника для удаления:\n\n"
+        for i, member in enumerate(available_members, 1):
+            role_emoji = "👑" if member["role"] == "admin" else "👤"
+            members_text += f"{i}. {role_emoji} User_{member['user_id']}\n"
+            members_text += f"   🆔 ID: {member['user_id']}\n"
+            members_text += f"   📅 Присоединился: {member['joined_at'].strftime('%d.%m.%Y') if member['joined_at'] else 'Неизвестно'}\n\n"
+        
+        members_text += "Отправьте номер участника для удаления или 'отмена' для возврата в меню."
+        
+        await update.message.reply_text(
+            members_text,
+            reply_markup=ReplyKeyboardMarkup([
+                [KeyboardButton("🔙 Отмена")]
+            ], resize_keyboard=True)
+        )
+        context.user_data['group_management_state'] = 'waiting_for_member_to_remove'
+        context.user_data['available_members'] = available_members
         return
     
     else:
@@ -3162,6 +3204,50 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             return
         context.user_data.pop('group_join_state', None)
         return
+    
+    # Обработка удаления участника группы
+    elif context.user_data.get('group_management_state') == 'waiting_for_member_to_remove':
+        if text == "🔙 Отмена":
+            await group_management_menu(update, context)
+            context.user_data.pop('group_management_state', None)
+            return
+        
+        try:
+            member_index = int(text) - 1
+            available_members = context.user_data.get('available_members', [])
+            
+            if 0 <= member_index < len(available_members):
+                member_to_remove = available_members[member_index]
+                success, message = remove_group_member(member_to_remove["user_id"])
+                
+                if success:
+                    await update.message.reply_text(
+                        f"✅ Участник User_{member_to_remove['user_id']} удален из группы.\n\n"
+                        f"{message}",
+                        reply_markup=get_main_menu_keyboard()
+                    )
+                else:
+                    await update.message.reply_text(
+                        f"❌ Ошибка при удалении участника: {message}",
+                        reply_markup=get_main_menu_keyboard()
+                    )
+            else:
+                await update.message.reply_text(
+                    "❌ Неверный номер участника. Попробуйте еще раз:",
+                    reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
+                )
+                return
+                
+        except ValueError:
+            await update.message.reply_text(
+                "❌ Пожалуйста, введите номер участника (например: 1, 2, 3):",
+                reply_markup=ReplyKeyboardMarkup([["🔙 Отмена"]], resize_keyboard=True)
+            )
+            return
+        
+        context.user_data.pop('group_management_state', None)
+        context.user_data.pop('available_members', None)
+        return
 
     # Улучшенная валидация и парсинг расхода
     amount, description = parse_expense_input(text)
@@ -3831,7 +3917,7 @@ def main():
     
     # Обработчик для управления группой (должен быть перед общим обработчиком сообщений)
     application.add_handler(MessageHandler(
-        filters.Regex("^(👥 Участники группы|🔑 Код приглашения|📊 Статистика группы|🔙 Главное меню)$"), 
+        filters.Regex("^(👥 Участники группы|🔑 Код приглашения|🗑️ Удалить участника группы|📊 Статистика группы|🔙 Главное меню)$"), 
         group_management_handler
     ))
     
@@ -6639,7 +6725,8 @@ def get_group_members(group_id: int) -> list:
     try:
         conn = get_db_connection()
         if not conn:
-            return []
+            # Fallback к файловой системе
+            return get_group_members_file_fallback(group_id)
         
         cursor = conn.cursor()
         cursor.execute('''
@@ -6661,8 +6748,146 @@ def get_group_members(group_id: int) -> list:
         return members
         
     except Exception as e:
-        logger.error(f"Ошибка при получении участников группы: {e}")
+        logger.error(f"Ошибка при получении участников группы (PostgreSQL): {e}")
+        if conn:
+            conn.close()
+        
+        # Fallback к файловой системе
+        logger.info("Пробуем fallback на файловую систему для получения участников группы...")
+        return get_group_members_file_fallback(group_id)
+
+
+def get_group_members_file_fallback(group_id: int) -> list:
+    """Fallback функция для получения участников группы из файловой системы"""
+    try:
+        import os
+        import json
+        from datetime import datetime
+        
+        # Ищем папку группы
+        group_folder = f"group_data/group_{group_id}"
+        members_file = os.path.join(group_folder, "members.json")
+        
+        if not os.path.exists(members_file):
+            logger.warning(f"Файл участников группы не найден: {members_file}")
+            return []
+        
+        with open(members_file, 'r', encoding='utf-8') as f:
+            members_data = json.load(f)
+        
+        members = []
+        for member in members_data.get("members", []):
+            # Парсим дату присоединения
+            joined_at = None
+            if member.get("joined_at"):
+                try:
+                    joined_at = datetime.fromisoformat(member["joined_at"].replace('Z', '+00:00'))
+                except (ValueError, TypeError):
+                    joined_at = None
+            
+            members.append({
+                "user_id": member["user_id"],
+                "role": member.get("role", "member"),
+                "joined_at": joined_at
+            })
+        
+        # Сортируем по дате присоединения
+        members.sort(key=lambda x: x["joined_at"] or datetime.min)
+        
+        logger.info(f"Fallback: найдено {len(members)} участников группы {group_id}")
+        return members
+        
+    except Exception as e:
+        logger.error(f"Ошибка в fallback функции получения участников группы: {e}")
         return []
+
+
+def remove_group_member(user_id: int) -> tuple[bool, str]:
+    """Удаляет участника из группы"""
+    try:
+        # Сначала пытаемся удалить из PostgreSQL
+        conn = get_db_connection()
+        if conn:
+            cursor = conn.cursor()
+            
+            # Получаем информацию о группе пользователя
+            cursor.execute('''
+                SELECT group_id FROM group_members WHERE user_id = %s
+            ''', (user_id,))
+            
+            result = cursor.fetchone()
+            if not result:
+                conn.close()
+                return False, "Пользователь не найден в группе"
+            
+            group_id = result[0]
+            
+            # Удаляем из базы данных
+            cursor.execute('''
+                DELETE FROM group_members WHERE user_id = %s
+            ''', (user_id,))
+            
+            conn.commit()
+            conn.close()
+            
+            logger.info(f"Пользователь {user_id} удален из группы {group_id} (PostgreSQL)")
+            return True, f"Пользователь удален из группы"
+        
+        # Fallback к файловой системе
+        return remove_group_member_file_fallback(user_id)
+        
+    except Exception as e:
+        logger.error(f"Ошибка при удалении участника группы (PostgreSQL): {e}")
+        if conn:
+            conn.rollback()
+            conn.close()
+        
+        # Fallback к файловой системе
+        logger.info("Пробуем fallback на файловую систему для удаления участника...")
+        return remove_group_member_file_fallback(user_id)
+
+
+def remove_group_member_file_fallback(user_id: int) -> tuple[bool, str]:
+    """Fallback функция для удаления участника группы из файловой системы"""
+    try:
+        import os
+        import json
+        
+        # Ищем пользователя в папках групп
+        group_data_dir = "group_data"
+        if not os.path.exists(group_data_dir):
+            return False, "Группы не найдены"
+        
+        for item in os.listdir(group_data_dir):
+            if item.startswith("group_"):
+                group_folder = os.path.join(group_data_dir, item)
+                if os.path.isdir(group_folder):
+                    members_file = os.path.join(group_folder, "members.json")
+                    if os.path.exists(members_file):
+                        with open(members_file, 'r', encoding='utf-8') as f:
+                            members_data = json.load(f)
+                        
+                        # Ищем пользователя в этой группе
+                        members = members_data.get("members", [])
+                        for i, member in enumerate(members):
+                            if member.get("user_id") == user_id:
+                                # Удаляем пользователя
+                                members.pop(i)
+                                members_data["members"] = members
+                                
+                                # Сохраняем обновленный файл
+                                with open(members_file, 'w', encoding='utf-8') as f:
+                                    json.dump(members_data, f, ensure_ascii=False, indent=2)
+                                
+                                group_id = int(item.replace("group_", ""))
+                                logger.info(f"Fallback: пользователь {user_id} удален из группы {group_id}")
+                                return True, f"Пользователь удален из группы"
+        
+        return False, "Пользователь не найден ни в одной группе"
+        
+    except Exception as e:
+        logger.error(f"Ошибка в fallback функции удаления участника группы: {e}")
+        return False, f"Ошибка при удалении: {e}"
 
 # Обновляем функцию проверки доступа
 def validate_block_access(block_name: str, user_id: int) -> bool:
