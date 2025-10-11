@@ -2050,8 +2050,8 @@ async def group_management_handler(update: Update, context: ContextTypes.DEFAULT
         context.user_data.pop('group_management_state', None)
         return
     
-    # Проверяем, находится ли пользователь в группе
-    if not is_user_in_group(user_id):
+    # Проверяем, находится ли пользователь в группе ИЛИ авторизован ли он
+    if not is_user_in_group(user_id) and not is_user_authorized(user_id):
         await update.message.reply_text(
             "👥 Группы\n\n"
             "У вас пока нет групп. Вы можете:\n\n"
@@ -2064,6 +2064,22 @@ async def group_management_handler(update: Update, context: ContextTypes.DEFAULT
             ], resize_keyboard=True)
         )
         context.user_data.pop('group_management_state', None)
+        return
+    
+    # Если пользователь авторизован, но не в группе, показываем меню создания/присоединения к группе
+    if is_user_authorized(user_id) and not is_user_in_group(user_id):
+        await update.message.reply_text(
+            "👥 Управление группами\n\n"
+            "Вы авторизованы, но не состоите ни в одной группе. Вы можете:\n\n"
+            "➕ Создать новую группу\n"
+            "🔗 Присоединиться к существующей группе\n\n"
+            "Выберите действие:",
+            reply_markup=ReplyKeyboardMarkup([
+                [KeyboardButton("➕ Создать группу"), KeyboardButton("🔗 Присоединиться к группе")],
+                [KeyboardButton("🔙 Главное меню")]
+            ], resize_keyboard=True)
+        )
+        context.user_data['group_management_state'] = 'waiting_for_action'
         return
     
     group_info = get_user_group(user_id)
@@ -6269,6 +6285,34 @@ def join_group_by_invitation(invitation_code: str, user_id: int, phone: str) -> 
         
         conn.commit()
         conn.close()
+        
+        # Добавляем пользователя в authorized_users.json для доступа к функциям бота
+        try:
+            users_data = load_authorized_users()
+            
+            # Проверяем, есть ли уже пользователь в списке
+            user_exists = False
+            for user in users_data.get("users", []):
+                if user.get("telegram_id") == user_id:
+                    user_exists = True
+                    break
+            
+            # Если пользователя нет, добавляем его
+            if not user_exists:
+                new_user = {
+                    "username": f"User_{user_id}",
+                    "added_date": datetime.now().isoformat(),
+                    "status": "active",
+                    "role": "user",
+                    "folder_name": f"user_{user_id}",
+                    "telegram_id": user_id
+                }
+                users_data["users"].append(new_user)
+                save_authorized_users(users_data)
+                logger.info(f"Пользователь {user_id} добавлен в authorized_users.json")
+            
+        except Exception as e:
+            logger.error(f"Ошибка при добавлении пользователя в authorized_users.json: {e}")
         
         return True, f"Вы успешно присоединились к группе '{group_name}'"
         
