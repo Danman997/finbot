@@ -6926,7 +6926,9 @@ def remove_group_member_file_fallback(user_id: int) -> tuple[bool, str]:
                             if member.get("user_id") == user_id:
                                 logger.info(f"Найден участник для удаления: {member}")
                                 
-                                # Удаляем пользователя
+                                group_id = int(item.replace("group_", ""))
+                                
+                                # Удаляем пользователя из файловой системы
                                 members.pop(i)
                                 members_data["members"] = members
                                 
@@ -6936,6 +6938,20 @@ def remove_group_member_file_fallback(user_id: int) -> tuple[bool, str]:
                                 
                                 logger.info(f"Файл участников обновлен: {members_data}")
                                 
+                                # Также удаляем из PostgreSQL, если подключение доступно
+                                try:
+                                    conn = get_db_connection()
+                                    if conn:
+                                        cursor = conn.cursor()
+                                        cursor.execute('DELETE FROM group_members WHERE user_id = %s AND group_id = %s', (user_id, group_id))
+                                        conn.commit()
+                                        conn.close()
+                                        logger.info(f"Пользователь {user_id} также удален из PostgreSQL группы {group_id}")
+                                    else:
+                                        logger.info("PostgreSQL недоступен, удаление только из файловой системы")
+                                except Exception as e:
+                                    logger.warning(f"Не удалось удалить пользователя {user_id} из PostgreSQL: {e}")
+                                
                                 # Удаляем пользователя из authorized_users.json
                                 try:
                                     delete_user_from_authorized_list(f"User_{user_id}")
@@ -6943,7 +6959,6 @@ def remove_group_member_file_fallback(user_id: int) -> tuple[bool, str]:
                                 except Exception as e:
                                     logger.warning(f"Не удалось удалить пользователя {user_id} из authorized_users.json: {e}")
                                 
-                                group_id = int(item.replace("group_", ""))
                                 logger.info(f"Fallback: пользователь {user_id} удален из группы {group_id}")
                                 return True, f"Пользователь удален из группы"
                     else:
@@ -7053,8 +7068,79 @@ def sync_groups_from_database():
         
         logger.info(f"Синхронизация завершена: {len(db_groups)} групп обработано")
         
+        # Дополнительно синхронизируем участников групп только для новых групп
+        sync_group_members_from_database()
+        
     except Exception as e:
         logger.error(f"Ошибка при синхронизации групп: {e}")
+
+
+def sync_group_members_from_database():
+    """Синхронизирует участников групп из PostgreSQL только для новых групп"""
+    try:
+        logger.info("Начинаем синхронизацию участников групп из PostgreSQL...")
+        conn = get_db_connection()
+        if not conn:
+            logger.info("Нет подключения к PostgreSQL, пропускаем синхронизацию участников")
+            return
+        
+        cursor = conn.cursor()
+        
+        # Получаем все участники групп из PostgreSQL
+        cursor.execute('''
+            SELECT gm.group_id, gm.user_id, gm.role, gm.joined_at
+            FROM group_members gm
+            ORDER BY gm.group_id, gm.joined_at
+        ''')
+        
+        db_members = cursor.fetchall()
+        conn.close()
+        
+        logger.info(f"Синхронизация участников: найдено {len(db_members)} записей в PostgreSQL")
+        
+        if not db_members:
+            logger.info("В PostgreSQL нет участников групп для синхронизации")
+            return
+        
+        # Группируем участников по группам
+        members_by_group = {}
+        for group_id, user_id, role, joined_at in db_members:
+            if group_id not in members_by_group:
+                members_by_group[group_id] = []
+            members_by_group[group_id].append({
+                "user_id": user_id,
+                "role": role,
+                "joined_at": joined_at.isoformat() if joined_at else datetime.now().isoformat()
+            })
+        
+        # Синхронизируем участников для каждой группы
+        for group_id, members in members_by_group.items():
+            group_folder = f"group_data/group_{group_id}"
+            members_file = os.path.join(group_folder, "members.json")
+            
+            # Синхронизируем только если файл участников не существует
+            if not os.path.exists(members_file):
+                logger.info(f"Синхронизация участников для группы {group_id} (файл не существует)")
+                
+                # Создаем папку группы, если её нет
+                os.makedirs(group_folder, exist_ok=True)
+                
+                # Создаем файл участников
+                members_data = {
+                    "members": members
+                }
+                
+                with open(members_file, 'w', encoding='utf-8') as f:
+                    json.dump(members_data, f, ensure_ascii=False, indent=2)
+                
+                logger.info(f"Синхронизировано {len(members)} участников для группы {group_id}")
+            else:
+                logger.info(f"Файл участников уже существует для группы {group_id}, пропускаем синхронизацию")
+        
+        logger.info("Синхронизация участников групп завершена")
+        
+    except Exception as e:
+        logger.error(f"Ошибка при синхронизации участников групп: {e}")
 
 
 def remove_user_from_database(user_id: int) -> tuple[bool, str]:
