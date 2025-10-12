@@ -4527,8 +4527,9 @@ async def planning_delete_confirm(update: Update, context: ContextTypes.DEFAULT_
                 plan_month = plan[1]
                 total_amount = plan[2]
                 
-                # Удаляем план из БД
-                if delete_budget_plan(plan_id):
+                # Удаляем план
+                user_id = update.effective_user.id
+                if delete_budget_plan(plan_id, user_id):
                     await update.message.reply_text(
                         f"✅ План на {plan_month.strftime('%m.%Y')} ({float(total_amount):.0f} Тг) успешно удален!",
                         reply_markup=get_main_menu_keyboard()
@@ -4559,24 +4560,53 @@ async def planning_delete_confirm(update: Update, context: ContextTypes.DEFAULT_
     )
     return ConversationHandler.END
 
-def delete_budget_plan(plan_id):
+def delete_budget_plan(plan_id, user_id=None):
     """Удалить план бюджета и все его статьи"""
-    conn = get_db_connection()
-    if not conn:
-        return False
-    try:
-        cursor = conn.cursor()
-        # Сначала удаляем все статьи плана
-        cursor.execute('DELETE FROM budget_plan_items WHERE plan_id = %s', (plan_id,))
-        # Затем удаляем сам план
-        cursor.execute('DELETE FROM budget_plans WHERE id = %s', (plan_id,))
-        conn.commit()
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка при удалении плана бюджета: {e}")
-        return False
-    finally:
-        conn.close()
+    if user_id:
+        # Работаем с файлами пользователя/группы
+        try:
+            import json
+            import os
+            
+            folder_path = get_user_folder_path(user_id)
+            budget_plans_file = f"{folder_path}/budget_plans.json"
+            
+            if not os.path.exists(budget_plans_file):
+                return False
+            
+            # Читаем планы
+            with open(budget_plans_file, 'r', encoding='utf-8') as f:
+                plans = json.load(f)
+            
+            # Удаляем план с указанным ID
+            plans = [plan for plan in plans if plan.get('id') != plan_id]
+            
+            # Записываем обратно в файл
+            with open(budget_plans_file, 'w', encoding='utf-8') as f:
+                json.dump(plans, f, ensure_ascii=False, indent=2)
+            
+            return True
+        except Exception as e:
+            logger.error(f"Ошибка при удалении плана бюджета из файла: {e}")
+            return False
+    else:
+        # Fallback к базе данных
+        conn = get_db_connection()
+        if not conn:
+            return False
+        try:
+            cursor = conn.cursor()
+            # Сначала удаляем все статьи плана
+            cursor.execute('DELETE FROM budget_plan_items WHERE plan_id = %s', (plan_id,))
+            # Затем удаляем сам план
+            cursor.execute('DELETE FROM budget_plans WHERE id = %s', (plan_id,))
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Ошибка при удалении плана бюджета: {e}")
+            return False
+        finally:
+            conn.close()
 
 async def custom_category_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обработка ввода новой пользовательской категории"""
@@ -5314,31 +5344,51 @@ async def budget_item_delete_confirm(update: Update, context: ContextTypes.DEFAU
                 selected_item = items[item_num]
                 cat, amt, comm = selected_item
                 
-                # Удаляем статью из базы данных
-                conn = get_db_connection()
-                if not conn:
-                    await update.message.reply_text(
-                        "❌ Ошибка подключения к базе данных.",
-                        reply_markup=get_main_menu_keyboard()
-                    )
-                    return ConversationHandler.END
+                # Удаляем статью из плана
+                user_id = update.effective_user.id
+                success = False
                 
                 try:
-                    cursor = conn.cursor()
-                    cursor.execute('''
-                        DELETE FROM budget_plan_items 
-                        WHERE plan_id = %s AND category = %s AND amount = %s
-                    ''', (context.user_data['current_plan_id'], cat, amt))
-                    conn.commit()
+                    import json
+                    import os
                     
-                    await update.message.reply_text(
-                        f"✅ Статья '{cat}' успешно удалена из плана!",
-                        reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
-                    )
+                    folder_path = get_user_folder_path(user_id)
+                    budget_plans_file = f"{folder_path}/budget_plans.json"
                     
-                    # Обновляем список статей в контексте
-                    items.pop(item_num)
-                    context.user_data['current_plan_items'] = items
+                    if os.path.exists(budget_plans_file):
+                        # Читаем планы
+                        with open(budget_plans_file, 'r', encoding='utf-8') as f:
+                            plans = json.load(f)
+                        
+                        # Находим план и удаляем статью
+                        for plan in plans:
+                            if plan.get('id') == context.user_data['current_plan_id']:
+                                items_list = plan.get('items', [])
+                                # Удаляем статью по категории и сумме
+                                plan['items'] = [item for item in items_list 
+                                                if not (item.get('category') == cat and item.get('amount') == amt)]
+                                break
+                        
+                        # Записываем обратно
+                        with open(budget_plans_file, 'w', encoding='utf-8') as f:
+                            json.dump(plans, f, ensure_ascii=False, indent=2)
+                        
+                        success = True
+                    
+                    if success:
+                        await update.message.reply_text(
+                            f"✅ Статья '{cat}' успешно удалена из плана!",
+                            reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+                        )
+                        
+                        # Обновляем список статей в контексте
+                        items.pop(item_num)
+                        context.user_data['current_plan_items'] = items
+                    else:
+                        await update.message.reply_text(
+                            "❌ Ошибка при удалении статьи. Попробуйте снова.",
+                            reply_markup=get_main_menu_keyboard()
+                        )
                     
                 except Exception as e:
                     logger.error(f"Ошибка при удалении статьи бюджета: {e}")
@@ -5346,8 +5396,6 @@ async def budget_item_delete_confirm(update: Update, context: ContextTypes.DEFAU
                         "❌ Ошибка при удалении статьи. Попробуйте снова.",
                         reply_markup=get_main_menu_keyboard()
                     )
-                finally:
-                    conn.close()
             else:
                 await update.message.reply_text(
                     "❌ Неверный номер статьи. Попробуйте снова.",
@@ -5618,29 +5666,65 @@ def get_monthly_expenses(month: int, year: int):
     finally:
         conn.close()
 
-def get_budget_plan_items(plan_id: int):
+def get_budget_plan_items(plan_id: int, user_id: int = None):
     """Получить элементы плана бюджета"""
-    conn = get_db_connection()
-    if not conn:
-        return []
-    
-    try:
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT category, amount, comment
-            FROM budget_plan_items 
-            WHERE plan_id = %s
-            ORDER BY amount DESC
-        ''', (plan_id,))
+    if user_id:
+        # Работаем с файлами пользователя/группы
+        try:
+            import json
+            import os
+            
+            folder_path = get_user_folder_path(user_id)
+            budget_plans_file = f"{folder_path}/budget_plans.json"
+            
+            if not os.path.exists(budget_plans_file):
+                return []
+            
+            # Читаем планы
+            with open(budget_plans_file, 'r', encoding='utf-8') as f:
+                plans = json.load(f)
+            
+            # Находим план с нужным ID
+            for plan in plans:
+                if plan.get('id') == plan_id:
+                    items = plan.get('items', [])
+                    # Конвертируем в формат БД (category, amount, comment)
+                    result = []
+                    for item in items:
+                        result.append((
+                            item.get('category', ''),
+                            float(item.get('amount', 0)),
+                            item.get('comment', '')
+                        ))
+                    return result
+            
+            return []
+        except Exception as e:
+            logger.error(f"Ошибка при получении элементов плана из файла: {e}")
+            return []
+    else:
+        # Fallback к базе данных
+        conn = get_db_connection()
+        if not conn:
+            return []
         
-        # Приводим все суммы к float для совместимости
-        rows = cursor.fetchall()
-        return [(row[0], float(row[1]), row[2]) for row in rows]
-    except Exception as e:
-        logger.error(f"Ошибка при получении элементов плана: {e}")
-        return []
-    finally:
-        conn.close()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT category, amount, comment
+                FROM budget_plan_items 
+                WHERE plan_id = %s
+                ORDER BY amount DESC
+            ''', (plan_id,))
+            
+            # Приводим все суммы к float для совместимости
+            rows = cursor.fetchall()
+            return [(row[0], float(row[1]), row[2]) for row in rows]
+        except Exception as e:
+            logger.error(f"Ошибка при получении элементов плана: {e}")
+            return []
+        finally:
+            conn.close()
 
 # --- АДМИН-ФУНКЦИОНАЛЬНОСТЬ ---
 # Константы для админ-системы
