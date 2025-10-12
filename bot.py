@@ -6534,14 +6534,14 @@ def create_default_group_files(group_folder: str):
         # Создаем файл напоминаний
         reminders_file = os.path.join(group_folder, "reminders.json")
         if not os.path.exists(reminders_file):
-            default_reminders = {"reminders": []}
+            default_reminders = []  # Простой список, а не объект
             with open(reminders_file, 'w', encoding='utf-8') as f:
                 json.dump(default_reminders, f, ensure_ascii=False, indent=2)
         
         # Создаем файл планов бюджета
         budget_file = os.path.join(group_folder, "budget_plans.json")
         if not os.path.exists(budget_file):
-            default_budget = {"plans": []}
+            default_budget = []  # Простой список, а не объект
             with open(budget_file, 'w', encoding='utf-8') as f:
                 json.dump(default_budget, f, ensure_ascii=False, indent=2)
         
@@ -7021,19 +7021,22 @@ def sync_groups_from_database():
                 logger.info(f"Синхронизация: создаем файлы по умолчанию для группы {group_id}")
                 create_default_group_files(group_folder)
                 
-                # Создаем файл участников с админом
+                # Создаем файл участников с админом (только если файл не существует)
                 members_file = os.path.join(group_folder, "members.json")
-                members_data = {
-                    "members": [
-                        {
-                            "user_id": admin_user_id,
-                            "role": "admin",
-                            "joined_at": created_at.isoformat() if created_at else datetime.now().isoformat()
-                        }
-                    ]
-                }
-                with open(members_file, 'w', encoding='utf-8') as f:
-                    json.dump(members_data, f, ensure_ascii=False, indent=2)
+                if not os.path.exists(members_file):
+                    members_data = {
+                        "members": [
+                            {
+                                "user_id": admin_user_id,
+                                "role": "admin",
+                                "joined_at": created_at.isoformat() if created_at else datetime.now().isoformat()
+                            }
+                        ]
+                    }
+                    with open(members_file, 'w', encoding='utf-8') as f:
+                        json.dump(members_data, f, ensure_ascii=False, indent=2)
+                else:
+                    logger.info(f"Файл участников уже существует для группы {group_id}, не перезаписываем")
                 
                 # Добавляем в реестр
                 new_group = {
