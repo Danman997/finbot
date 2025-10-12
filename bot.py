@@ -358,9 +358,16 @@ def get_user_budget_plans(user_id: int) -> list:
             return []
         
         with open(budget_plans_file, 'r', encoding='utf-8') as f:
-            plans = json.load(f)
+            data = json.load(f)
         
-        return plans
+        # Проверяем, является ли data списком или словарем
+        if isinstance(data, list):
+            return data
+        elif isinstance(data, dict) and 'plans' in data:
+            return data['plans']
+        else:
+            logger.warning(f"Неожиданный формат данных в {budget_plans_file}: {type(data)}")
+            return []
     except Exception as e:
         logger.error(f"Ошибка при получении планов бюджета пользователя {user_id}: {e}")
         return []
@@ -4448,7 +4455,12 @@ async def planning_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
                 return ConversationHandler.END
             
             # Сортируем планы по дате (новые сначала)
-            plans.sort(key=lambda x: x.get('plan_month', ''), reverse=True)
+            if isinstance(plans, list):
+                plans.sort(key=lambda x: x.get('plan_month', ''), reverse=True)
+            else:
+                logger.error(f"plans не является списком: {type(plans)}")
+                await update.message.reply_text("Ошибка формата данных планов.", reply_markup=get_main_menu_keyboard())
+                return ConversationHandler.END
             
             text_lines = ["📋 Последние планы:"]
             kb = []
@@ -4841,7 +4853,15 @@ def add_payment_reminder(title, description, amount, start_date, end_date, user_
             reminders = []
             if os.path.exists(reminders_file):
                 with open(reminders_file, 'r', encoding='utf-8') as f:
-                    reminders = json.load(f)
+                    data = json.load(f)
+                    # Проверяем формат данных
+                    if isinstance(data, list):
+                        reminders = data
+                    elif isinstance(data, dict) and 'reminders' in data:
+                        reminders = data['reminders']
+                    else:
+                        logger.warning(f"Неожиданный формат данных в {reminders_file}: {type(data)}")
+                        reminders = []
             
             # Генерируем новый ID
             new_id = max([rem.get('id', 0) for rem in reminders], default=0) + 1
@@ -4906,7 +4926,16 @@ def get_all_active_reminders(user_id=None):
                 return []
             
             with open(reminders_file, 'r', encoding='utf-8') as f:
-                reminders = json.load(f)
+                data = json.load(f)
+            
+            # Проверяем формат данных
+            if isinstance(data, list):
+                reminders = data
+            elif isinstance(data, dict) and 'reminders' in data:
+                reminders = data['reminders']
+            else:
+                logger.warning(f"Неожиданный формат данных в {reminders_file}: {type(data)}")
+                return []
             
             # Фильтруем только активные напоминания и конвертируем в формат БД
             active_reminders = []
@@ -4965,7 +4994,16 @@ def delete_reminder(reminder_id, user_id=None):
             
             # Читаем существующие напоминания
             with open(reminders_file, 'r', encoding='utf-8') as f:
-                reminders = json.load(f)
+                data = json.load(f)
+            
+            # Проверяем формат данных
+            if isinstance(data, list):
+                reminders = data
+            elif isinstance(data, dict) and 'reminders' in data:
+                reminders = data['reminders']
+            else:
+                logger.warning(f"Неожиданный формат данных в {reminders_file}: {type(data)}")
+                return False
             
             # Удаляем напоминание с указанным ID
             reminders = [rem for rem in reminders if rem['id'] != reminder_id]
