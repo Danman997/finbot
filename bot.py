@@ -3775,6 +3775,11 @@ def main():
     
     init_new_database_schema()  # Новая схема БД
     migrate_existing_data()  # Миграция данных
+    
+    # Синхронизируем группы из PostgreSQL в файловую систему
+    logger.info("Синхронизация групп из PostgreSQL...")
+    sync_groups_from_database()
+    
     application = Application.builder().token(BOT_TOKEN).build()
 
     # Обработчик для отчетов
@@ -6652,7 +6657,9 @@ def join_group_by_invitation(invitation_code: str, user_id: int, phone: str) -> 
         
         conn = get_db_connection()
         if not conn:
-            return False, "Ошибка подключения к базе данных"
+            # Fallback к файловой системе
+            logger.info("Нет подключения к БД, используем файловую систему для присоединения к группе")
+            return join_group_by_invitation_file_fallback(invitation_code, user_id, phone)
         
         cursor = conn.cursor()
         
@@ -6730,6 +6737,11 @@ def join_group_by_invitation(invitation_code: str, user_id: int, phone: str) -> 
         except Exception as e:
             logger.error(f"Ошибка при создании папки группы: {e}")
         
+        # Убеждаемся, что пользователь добавлен в authorized_users.json
+        if not is_user_authorized(user_id):
+            add_user_to_authorized_list(f"User_{user_id}", f"group_member_{user_id}", "user")
+            logger.info(f"Пользователь {user_id} добавлен в authorized_users.json при присоединении к группе")
+        
         logger.info(f"Пользователь {user_id} успешно присоединился к группе '{group_name}' (ID: {group_id})")
         return True, f"Вы успешно присоединились к группе '{group_name}'"
         
@@ -6751,7 +6763,10 @@ def join_group_by_invitation_file_fallback(invitation_code: str, user_id: int, p
         import os
         import json
         
-        # Сначала пробуем найти группу по коду в файловой системе
+        # Сначала синхронизируем группы из PostgreSQL в файловую систему
+        sync_groups_from_database()
+        
+        # Затем пробуем найти группу по коду в файловой системе
         groups_registry_file = "group_data/groups_registry.json"
         
         if os.path.exists(groups_registry_file):
@@ -6804,6 +6819,11 @@ def join_group_by_invitation_file_fallback(invitation_code: str, user_id: int, p
                 members_data = {"members": existing_members}
                 with open(members_file, 'w', encoding='utf-8') as f:
                     json.dump(members_data, f, ensure_ascii=False, indent=2)
+                
+                # Убеждаемся, что пользователь добавлен в authorized_users.json
+                if not is_user_authorized(user_id):
+                    add_user_to_authorized_list(f"User_{user_id}", f"group_member_{user_id}", "user")
+                    logger.info(f"Fallback: пользователь {user_id} добавлен в authorized_users.json при присоединении к группе")
                 
                 logger.info(f"Fallback: пользователь {user_id} добавлен в группу '{group_name}' (ID: {group_id})")
                 return True, f"Вы успешно присоединились к группе '{group_name}' (режим совместимости)"
@@ -6989,6 +7009,91 @@ def remove_group_member_file_fallback(user_id: int) -> tuple[bool, str]:
     except Exception as e:
         logger.error(f"Ошибка в fallback функции удаления участника группы: {e}")
         return False, f"Ошибка при удалении: {e}"
+
+
+def sync_groups_from_database():
+    """Синхронизирует группы из PostgreSQL в файловую систему"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            logger.warning("Нет подключения к БД для синхронизации групп")
+            return
+        
+        cursor = conn.cursor()
+        
+        # Получаем все группы из PostgreSQL
+        cursor.execute('''
+            SELECT id, name, admin_user_id, invitation_code, created_at
+            FROM groups
+            ORDER BY id
+        ''')
+        
+        db_groups = cursor.fetchall()
+        conn.close()
+        
+        if not db_groups:
+            logger.info("В PostgreSQL нет групп для синхронизации")
+            return
+        
+        # Читаем существующий реестр групп
+        groups_registry_file = "group_data/groups_registry.json"
+        groups_registry = {"groups": []}
+        
+        if os.path.exists(groups_registry_file):
+            with open(groups_registry_file, 'r', encoding='utf-8') as f:
+                groups_registry = json.load(f)
+        
+        # Создаем список существующих групп в файловой системе
+        existing_group_ids = {group.get("id") for group in groups_registry.get("groups", [])}
+        
+        # Добавляем группы из PostgreSQL, которых нет в файловой системе
+        for group_row in db_groups:
+            group_id, name, admin_user_id, invitation_code, created_at = group_row
+            
+            if group_id not in existing_group_ids:
+                logger.info(f"Синхронизация группы {group_id} из PostgreSQL в файловую систему")
+                
+                # Создаем папку группы
+                group_folder = f"group_data/group_{group_id}"
+                os.makedirs(group_folder, exist_ok=True)
+                
+                # Создаем файлы по умолчанию
+                create_default_group_files(group_folder)
+                
+                # Создаем файл участников с админом
+                members_file = os.path.join(group_folder, "members.json")
+                members_data = {
+                    "members": [
+                        {
+                            "user_id": admin_user_id,
+                            "role": "admin",
+                            "joined_at": created_at.isoformat() if created_at else datetime.now().isoformat()
+                        }
+                    ]
+                }
+                with open(members_file, 'w', encoding='utf-8') as f:
+                    json.dump(members_data, f, ensure_ascii=False, indent=2)
+                
+                # Добавляем в реестр
+                new_group = {
+                    "id": group_id,
+                    "name": name,
+                    "admin_user_id": admin_user_id,
+                    "invitation_code": invitation_code,
+                    "created_at": created_at.isoformat() if created_at else datetime.now().isoformat()
+                }
+                groups_registry["groups"].append(new_group)
+                
+                logger.info(f"Группа {group_id} синхронизирована в файловую систему")
+        
+        # Сохраняем обновленный реестр
+        with open(groups_registry_file, 'w', encoding='utf-8') as f:
+            json.dump(groups_registry, f, ensure_ascii=False, indent=2)
+        
+        logger.info(f"Синхронизация завершена: {len(db_groups)} групп обработано")
+        
+    except Exception as e:
+        logger.error(f"Ошибка при синхронизации групп: {e}")
 
 
 def remove_user_from_database(user_id: int) -> tuple[bool, str]:
