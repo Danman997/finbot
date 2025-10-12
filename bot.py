@@ -343,27 +343,21 @@ def get_user_categories(user_id: int) -> list:
         return []
 
 def get_user_budget_plans(user_id: int) -> list:
-    """Получает планы бюджета пользователя из базы данных"""
+    """Получает планы бюджета пользователя из файловой системы"""
     try:
-        user = get_user_by_telegram_id(user_id)
-        if not user:
+        import json
+        import os
+        
+        folder_path = get_user_folder_path(user_id)
+        budget_plans_file = f"{folder_path}/budget_plans.json"
+        
+        if not os.path.exists(budget_plans_file):
             return []
         
-        from database import get_user_budget_plans as db_get_user_budget_plans
-        plans = db_get_user_budget_plans(user['id'])
-        return [
-            {
-                'id': plan['id'],
-                'name': plan['plan_name'],
-                'total_amount': float(plan['total_amount']),
-                'spent_amount': float(plan['spent_amount']),
-                'start_date': plan['start_date'].strftime('%Y-%m-%d'),
-                'end_date': plan['end_date'].strftime('%Y-%m-%d'),
-                'categories': plan['categories'],
-                'is_active': plan['is_active']
-            }
-            for plan in plans
-        ]
+        with open(budget_plans_file, 'r', encoding='utf-8') as f:
+            plans = json.load(f)
+        
+        return plans
     except Exception as e:
         logger.error(f"Ошибка при получении планов бюджета пользователя {user_id}: {e}")
         return []
@@ -3471,7 +3465,8 @@ async def generate_simple_comparison(update: Update, context: ContextTypes.DEFAU
     """Простое сравнение планов и расходов по категориям с графиком и Excel файлом"""
     try:
         # Получаем план бюджета
-        plan_data = get_budget_plan_by_month(month, year)
+        user_id = update.effective_user.id
+        plan_data = get_budget_plan_by_month(month, year, user_id)
         if not plan_data:
             await update.message.reply_text(
                 f"❌ План бюджета на {get_month_name(month)} {year} не найден.",
@@ -3480,13 +3475,11 @@ async def generate_simple_comparison(update: Update, context: ContextTypes.DEFAU
             return
         
         plan_id, total_budget = plan_data
-        
-        # Получаем детали плана по категориям
-        plan_items = get_budget_plan_items(plan_id)
+        plan_items = get_budget_plan_items(plan_id, user_id)
         plan_dict = {item[0]: item[1] for item in plan_items}  # категория: сумма
         
         # Получаем расходы за месяц
-        expenses = get_monthly_expenses(month, year)
+        expenses = get_monthly_expenses(month, year, user_id)
         expense_dict = {item[0]: item[1] for item in expenses}  # категория: сумма
         
         # Получаем все уникальные категории
@@ -4219,30 +4212,48 @@ def get_budget_plan(plan_month: date, user_id: int = None):
 		finally:
 			conn.close()
 
-def get_budget_plan_by_month(month: int, year: int):
+def get_budget_plan_by_month(month: int, year: int, user_id: int = None):
 	"""Получить план бюджета по месяцу и году"""
-	conn = get_db_connection()
-	if not conn:
-		return None
-	try:
-		cursor = conn.cursor()
-		cursor.execute('''
-			SELECT id, total_amount 
-			FROM budget_plans 
-			WHERE EXTRACT(MONTH FROM plan_month) = %s 
-			AND EXTRACT(YEAR FROM plan_month) = %s
-		''', (month, year))
-		row = cursor.fetchone()
-		if row:
-			# Приводим Decimal к float для совместимости
-			total_amount = float(row[1]) if row[1] is not None else 0.0
-			return (row[0], total_amount)
-		return None
-	except Exception as e:
-		logger.error(f"Ошибка при получении плана бюджета по месяцу: {e}")
-		return None
-	finally:
-		conn.close()
+	if user_id:
+		# Работаем с файлами пользователя/группы
+		try:
+			plans = get_user_budget_plans(user_id)
+			
+			# Ищем план на нужный месяц
+			target_month = f"{year}-{month:02d}-01"  # Формат YYYY-MM-01
+			for plan in plans:
+				if plan.get('plan_month', '').startswith(target_month[:7]):  # Сравниваем YYYY-MM
+					total_amount = float(plan.get('total_amount', 0))
+					return (plan.get('id'), total_amount)
+			
+			return None
+		except Exception as e:
+			logger.error(f"Ошибка при получении плана бюджета по месяцу из файла: {e}")
+			return None
+	else:
+		# Fallback к базе данных
+		conn = get_db_connection()
+		if not conn:
+			return None
+		try:
+			cursor = conn.cursor()
+			cursor.execute('''
+				SELECT id, total_amount 
+				FROM budget_plans 
+				WHERE EXTRACT(MONTH FROM plan_month) = %s 
+				AND EXTRACT(YEAR FROM plan_month) = %s
+			''', (month, year))
+			row = cursor.fetchone()
+			if row:
+				# Приводим Decimal к float для совместимости
+				total_amount = float(row[1]) if row[1] is not None else 0.0
+				return (row[0], total_amount)
+			return None
+		except Exception as e:
+			logger.error(f"Ошибка при получении плана бюджета по месяцу: {e}")
+			return None
+		finally:
+			conn.close()
 
 # --- Диалог планирования бюджета ---
 async def planning_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -5184,6 +5195,7 @@ async def reminder_end_date_input(update: Update, context: ContextTypes.DEFAULT_
     desc = context.user_data['reminder_desc']
     amount = context.user_data['reminder_amount']
     start_date = context.user_data['reminder_start_date']
+    user_id = update.effective_user.id
     
     if add_payment_reminder(title, desc, amount, start_date, end_date, user_id):
         days_left = (end_date - datetime.now().date()).days
@@ -5640,31 +5652,66 @@ async def expense_delete_confirm(update: Update, context: ContextTypes.DEFAULT_T
         )
         return ConversationHandler.END
 
-def get_monthly_expenses(month: int, year: int):
+def get_monthly_expenses(month: int, year: int, user_id: int = None):
     """Получить расходы за месяц"""
-    conn = get_db_connection()
-    if not conn:
-        return []
-    
-    try:
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT category, SUM(amount) as total
-            FROM expenses 
-            WHERE EXTRACT(MONTH FROM transaction_date) = %s
-            AND EXTRACT(YEAR FROM transaction_date) = %s
-            GROUP BY category
-            ORDER BY total DESC
-        ''', (month, year))
+    if user_id:
+        # Работаем с файлами пользователя/группы
+        try:
+            import csv
+            import os
+            from datetime import datetime
+            
+            folder_path = get_user_folder_path(user_id)
+            expenses_file = f"{folder_path}/expenses.csv"
+            
+            if not os.path.exists(expenses_file):
+                return []
+            
+            expenses_by_category = {}
+            
+            with open(expenses_file, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    try:
+                        transaction_date = datetime.strptime(row['transaction_date'], '%Y-%m-%d').date()
+                        if transaction_date.month == month and transaction_date.year == year:
+                            category = row['category']
+                            amount = float(row['amount'])
+                            expenses_by_category[category] = expenses_by_category.get(category, 0) + amount
+                    except (ValueError, KeyError) as e:
+                        logger.warning(f"Ошибка при обработке строки расходов: {e}")
+                        continue
+            
+            # Сортируем по сумме (убывание)
+            return sorted(expenses_by_category.items(), key=lambda x: x[1], reverse=True)
+        except Exception as e:
+            logger.error(f"Ошибка при получении расходов за месяц из файла: {e}")
+            return []
+    else:
+        # Fallback к базе данных
+        conn = get_db_connection()
+        if not conn:
+            return []
         
-        # Приводим все суммы к float для совместимости
-        rows = cursor.fetchall()
-        return [(row[0], float(row[1])) for row in rows]
-    except Exception as e:
-        logger.error(f"Ошибка при получении расходов за месяц: {e}")
-        return []
-    finally:
-        conn.close()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT category, SUM(amount) as total
+                FROM expenses 
+                WHERE EXTRACT(MONTH FROM transaction_date) = %s
+                AND EXTRACT(YEAR FROM transaction_date) = %s
+                GROUP BY category
+                ORDER BY total DESC
+            ''', (month, year))
+            
+            # Приводим все суммы к float для совместимости
+            rows = cursor.fetchall()
+            return [(row[0], float(row[1])) for row in rows]
+        except Exception as e:
+            logger.error(f"Ошибка при получении расходов за месяц: {e}")
+            return []
+        finally:
+            conn.close()
 
 def get_budget_plan_items(plan_id: int, user_id: int = None):
     """Получить элементы плана бюджета"""
