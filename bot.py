@@ -6649,8 +6649,21 @@ def create_group_file_fallback(name: str, admin_user_id: int) -> tuple[bool, str
         
         # Убеждаемся, что админ добавлен в authorized_users.json
         if not is_user_authorized(admin_user_id):
-            add_user_to_authorized_list(f"User_{admin_user_id}", f"group_admin_{admin_user_id}", "admin")
-            logger.info(f"Fallback: пользователь {admin_user_id} добавлен в authorized_users.json как админ группы")
+            success, message = add_user_to_authorized_list(f"User_{admin_user_id}", f"group_admin_{admin_user_id}", "admin")
+            if success:
+                # Обновляем telegram_id для пользователя
+                update_user_telegram_id(f"User_{admin_user_id}", admin_user_id)
+                logger.info(f"Fallback: пользователь {admin_user_id} добавлен в authorized_users.json как админ группы")
+            else:
+                logger.warning(f"Fallback: не удалось добавить пользователя {admin_user_id}: {message}")
+        
+        # Проверяем, что группа действительно создана и пользователь добавлен
+        logger.info(f"Fallback: проверяем создание группы...")
+        test_group_info = get_user_group(admin_user_id)
+        if test_group_info:
+            logger.info(f"Fallback: проверка успешна - группа найдена: {test_group_info}")
+        else:
+            logger.warning(f"Fallback: группа не найдена после создания! admin_user_id={admin_user_id}")
         
         logger.info(f"Fallback: группа '{name}' создана с ID {group_id} в файловой системе")
         logger.info(f"Fallback: пользователь {admin_user_id} добавлен как админ")
@@ -6679,23 +6692,39 @@ def get_user_group_file_fallback(user_id: int) -> dict:
         import os
         import json
         
+        logger.info(f"Fallback: поиск группы для пользователя {user_id}")
+        
         # Ищем в папках групп
         group_data_dir = "group_data"
         if not os.path.exists(group_data_dir):
+            logger.warning(f"Fallback: папка групп не найдена: {group_data_dir}")
             return None
+        
+        logger.info(f"Fallback: ищем в папке: {group_data_dir}")
         
         for item in os.listdir(group_data_dir):
             if item.startswith("group_"):
                 group_folder = os.path.join(group_data_dir, item)
+                logger.info(f"Fallback: проверяем папку группы: {group_folder}")
+                
                 if os.path.isdir(group_folder):
                     members_file = os.path.join(group_folder, "members.json")
+                    logger.info(f"Fallback: проверяем файл участников: {members_file}")
+                    
                     if os.path.exists(members_file):
                         with open(members_file, 'r', encoding='utf-8') as f:
                             members_data = json.load(f)
                         
+                        logger.info(f"Fallback: данные участников группы {item}: {members_data}")
+                        
                         # Проверяем, есть ли пользователь в этой группе
-                        for member in members_data.get("members", []):
+                        members_list = members_data.get("members", [])
+                        logger.info(f"Fallback: список участников группы {item}: {members_list}")
+                        
+                        for member in members_list:
+                            logger.info(f"Fallback: проверяем участника {member} (ищем user_id: {user_id})")
                             if member.get("user_id") == user_id:
+                                logger.info(f"Fallback: найден участник в группе {item}")
                                 group_id = int(item.replace("group_", ""))
                                 
                                 # Получаем информацию о группе из реестра
@@ -6724,6 +6753,8 @@ def get_user_group_file_fallback(user_id: int) -> dict:
                                 }
                                 logger.info(f"Fallback: найдена группа для пользователя {user_id}: {group_info}")
                                 return group_info
+                    else:
+                        logger.warning(f"Fallback: файл участников не найден: {members_file}")
         
         logger.info(f"Fallback: группа для пользователя {user_id} не найдена")
         return None
@@ -6825,8 +6856,13 @@ def join_group_by_invitation_file_fallback(invitation_code: str, user_id: int, p
                 
                 # Убеждаемся, что пользователь добавлен в authorized_users.json
                 if not is_user_authorized(user_id):
-                    add_user_to_authorized_list(f"User_{user_id}", f"group_member_{user_id}", "user")
-                    logger.info(f"Fallback: пользователь {user_id} добавлен в authorized_users.json при присоединении к группе")
+                    success, message = add_user_to_authorized_list(f"User_{user_id}", f"group_member_{user_id}", "user")
+                    if success:
+                        # Обновляем telegram_id для пользователя
+                        update_user_telegram_id(f"User_{user_id}", user_id)
+                        logger.info(f"Fallback: пользователь {user_id} добавлен в authorized_users.json при присоединении к группе")
+                    else:
+                        logger.warning(f"Fallback: не удалось добавить пользователя {user_id}: {message}")
                 
                 logger.info(f"Fallback: пользователь {user_id} добавлен в группу '{group_name}' (ID: {group_id})")
                 return True, f"Вы успешно присоединились к группе '{group_name}' (режим совместимости)"
