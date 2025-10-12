@@ -351,6 +351,9 @@ def get_user_budget_plans(user_id: int) -> list:
         folder_path = get_user_folder_path(user_id)
         budget_plans_file = f"{folder_path}/budget_plans.json"
         
+        # Создаем папку, если её нет
+        os.makedirs(folder_path, exist_ok=True)
+        
         if not os.path.exists(budget_plans_file):
             return []
         
@@ -4032,6 +4035,10 @@ def upsert_budget_plan(plan_month: date, total_amount: float, user_id: int = Non
 				# Сохраняем планы обратно в файл
 				folder_path = get_user_folder_path(user_id)
 				budget_plans_file = f"{folder_path}/budget_plans.json"
+				
+				# Создаем папку, если её нет
+				os.makedirs(folder_path, exist_ok=True)
+				
 				with open(budget_plans_file, 'w', encoding='utf-8') as f:
 					json.dump(plans, f, ensure_ascii=False, indent=2)
 				
@@ -4110,6 +4117,10 @@ def add_budget_item(plan_id: int, category: str, amount: float, comment: str | N
 				# Сохраняем планы обратно в файл
 				folder_path = get_user_folder_path(user_id)
 				budget_plans_file = f"{folder_path}/budget_plans.json"
+				
+				# Создаем папку, если её нет
+				os.makedirs(folder_path, exist_ok=True)
+				
 				with open(budget_plans_file, 'w', encoding='utf-8') as f:
 					json.dump(plans, f, ensure_ascii=False, indent=2)
 				
@@ -4823,6 +4834,9 @@ def add_payment_reminder(title, description, amount, start_date, end_date, user_
             folder_path = get_user_folder_path(user_id)
             reminders_file = f"{folder_path}/reminders.json"
             
+            # Создаем папку, если её нет
+            os.makedirs(folder_path, exist_ok=True)
+            
             # Читаем существующие напоминания
             reminders = []
             if os.path.exists(reminders_file):
@@ -4884,6 +4898,9 @@ def get_all_active_reminders(user_id=None):
             
             folder_path = get_user_folder_path(user_id)
             reminders_file = f"{folder_path}/reminders.json"
+            
+            # Создаем папку, если её нет
+            os.makedirs(folder_path, exist_ok=True)
             
             if not os.path.exists(reminders_file):
                 return []
@@ -5663,6 +5680,9 @@ def get_monthly_expenses(month: int, year: int, user_id: int = None):
             
             folder_path = get_user_folder_path(user_id)
             expenses_file = f"{folder_path}/expenses.csv"
+            
+            # Создаем папку, если её нет
+            os.makedirs(folder_path, exist_ok=True)
             
             if not os.path.exists(expenses_file):
                 return []
