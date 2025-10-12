@@ -674,6 +674,15 @@ def add_expense_old(amount, category, description, transaction_date, user_id=Non
                 ''', (amount, category, description, transaction_date))
                 conn.commit()
                 logger.info(f"Расход успешно добавлен в PostgreSQL для пользователя {user_id}")
+                
+                # Синхронизируем в PostgreSQL (уже в БД, но для консистентности)
+                sync_to_database(user_id, "expense", "add", {
+                    'amount': amount,
+                    'category': category,
+                    'description': description,
+                    'transaction_date': transaction_date
+                })
+                
                 return True
             except Exception as e:
                 logger.error(f"Ошибка при добавлении расхода в PostgreSQL для пользователя {user_id}: {e}")
@@ -752,6 +761,15 @@ def add_expense_old(amount, category, description, transaction_date, user_id=Non
                     writer.writerows(expenses)
                 
                 logger.info(f"Расход успешно добавлен в файл {expenses_file}")
+                
+                # Синхронизируем в PostgreSQL
+                sync_to_database(user_id, "expense", "add", {
+                    'amount': amount,
+                    'category': category,
+                    'description': description,
+                    'transaction_date': transaction_date
+                })
+                
                 return True
             except Exception as e:
                 logger.error(f"Ошибка при добавлении расхода в файл для пользователя {user_id}: {e}")
@@ -768,6 +786,15 @@ def add_expense_old(amount, category, description, transaction_date, user_id=Non
                 VALUES (%s, %s, %s, %s)
             ''', (amount, category, description, transaction_date))
             conn.commit()
+            
+            # Синхронизируем в PostgreSQL (уже в БД, но для консистентности)
+            sync_to_database(None, "expense", "add", {
+                'amount': amount,
+                'category': category,
+                'description': description,
+                'transaction_date': transaction_date
+            })
+            
             return True
         except Exception as e:
             logger.error(f"Ошибка при добавлении расхода в БД: {e}")
@@ -1019,6 +1046,10 @@ def delete_expense(expense_id: int, user_id: int = None) -> bool:
                 DELETE FROM expenses WHERE id = %s
             ''', (expense_id,))
             conn.commit()
+            
+            # Синхронизируем в PostgreSQL
+            sync_to_database(None, "expense", "delete", {'expense_id': expense_id})
+            
             return True
         except Exception as e:
             logger.error(f"Ошибка при удалении расхода из БД: {e}")
@@ -1066,6 +1097,10 @@ def delete_expense(expense_id: int, user_id: int = None) -> bool:
                     writer.writeheader()
             
             logger.info(f"Расход с ID {expense_id} успешно удален из файла {expenses_file}")
+            
+            # Синхронизируем в PostgreSQL
+            sync_to_database(user_id, "expense", "delete", {'expense_id': expense_id})
+            
             return True
             
         except Exception as e:
@@ -4118,6 +4153,15 @@ def add_budget_item(plan_id: int, category: str, amount: float, comment: str | N
 					VALUES (%s, %s, %s, %s)
 				''', (plan_id, category, amount, comment))
 				conn.commit()
+				
+				# Синхронизируем в PostgreSQL
+				sync_to_database(user_id, "budget_item", "add", {
+					'plan_id': plan_id,
+					'category': category,
+					'amount': amount,
+					'comment': comment
+				})
+				
 				return True
 			except Exception as e:
 				logger.error(f"Ошибка при добавлении статьи бюджета в PostgreSQL для пользователя {user_id}: {e}")
@@ -4156,6 +4200,14 @@ def add_budget_item(plan_id: int, category: str, amount: float, comment: str | N
 				with open(budget_plans_file, 'w', encoding='utf-8') as f:
 					json.dump(plans, f, ensure_ascii=False, indent=2)
 				
+				# Синхронизируем в PostgreSQL
+				sync_to_database(user_id, "budget_item", "add", {
+					'plan_id': plan_id,
+					'category': category,
+					'amount': amount,
+					'comment': comment
+				})
+				
 				return True
 			except Exception as e:
 				logger.error(f"Ошибка при добавлении статьи бюджета пользователя {user_id}: {e}")
@@ -4172,6 +4224,15 @@ def add_budget_item(plan_id: int, category: str, amount: float, comment: str | N
 				VALUES (%s, %s, %s, %s)
 			''', (plan_id, category, amount, comment))
 			conn.commit()
+			
+			# Синхронизируем в PostgreSQL
+			sync_to_database(None, "budget_item", "add", {
+				'plan_id': plan_id,
+				'category': category,
+				'amount': amount,
+				'comment': comment
+			})
+			
 			return True
 		except Exception as e:
 			logger.error(f"Ошибка при добавлении статьи бюджета: {e}")
@@ -4910,6 +4971,15 @@ def add_payment_reminder(title, description, amount, start_date, end_date, user_
             with open(reminders_file, 'w', encoding='utf-8') as f:
                 json.dump(reminders, f, ensure_ascii=False, indent=2)
             
+            # Синхронизируем в PostgreSQL
+            sync_to_database(user_id, "reminder", "add", {
+                'title': title,
+                'description': description,
+                'amount': amount,
+                'start_date': start_date,
+                'end_date': end_date
+            })
+            
             return True
         except Exception as e:
             logger.error(f"Ошибка при добавлении напоминания в файл: {e}")
@@ -4926,6 +4996,16 @@ def add_payment_reminder(title, description, amount, start_date, end_date, user_
                 VALUES (%s, %s, %s, %s, %s)
             ''', (title, description, amount, start_date, end_date))
             conn.commit()
+            
+            # Синхронизируем в PostgreSQL (уже в БД, но для консистентности)
+            sync_to_database(None, "reminder", "add", {
+                'title': title,
+                'description': description,
+                'amount': amount,
+                'start_date': start_date,
+                'end_date': end_date
+            })
+            
             return True
         except Exception as e:
             logger.error(f"Ошибка при добавлении напоминания в БД: {e}")
@@ -5037,6 +5117,9 @@ def delete_reminder(reminder_id, user_id=None):
             with open(reminders_file, 'w', encoding='utf-8') as f:
                 json.dump(reminders, f, ensure_ascii=False, indent=2)
             
+            # Синхронизируем в PostgreSQL
+            sync_to_database(user_id, "reminder", "delete", {'reminder_id': reminder_id})
+            
             return True
         except Exception as e:
             logger.error(f"Ошибка при удалении напоминания из файла: {e}")
@@ -5050,6 +5133,10 @@ def delete_reminder(reminder_id, user_id=None):
             cursor = conn.cursor()
             cursor.execute('DELETE FROM payment_reminders WHERE id = %s', (reminder_id,))
             conn.commit()
+            
+            # Синхронизируем в PostgreSQL
+            sync_to_database(None, "reminder", "delete", {'reminder_id': reminder_id})
+            
             return True
         except Exception as e:
             logger.error(f"Ошибка при удалении напоминания из БД: {e}")
@@ -7145,6 +7232,74 @@ def sync_groups_from_database():
         
     except Exception as e:
         logger.error(f"Ошибка при синхронизации групп: {e}")
+
+
+def sync_to_database(user_id: int, data_type: str, action: str, data: dict = None):
+    """Синхронизирует изменения данных в PostgreSQL"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            logger.info(f"PostgreSQL недоступен, синхронизация {data_type} пропущена")
+            return False
+        
+        cursor = conn.cursor()
+        
+        if data_type == "expense" and action == "add":
+            # Синхронизируем добавление расхода
+            cursor.execute('''
+                INSERT INTO expenses (user_id, amount, category, description, transaction_date)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT DO NOTHING
+            ''', (user_id, data['amount'], data['category'], data['description'], data['transaction_date']))
+            
+        elif data_type == "expense" and action == "delete":
+            # Синхронизируем удаление расхода
+            cursor.execute('DELETE FROM expenses WHERE id = %s AND user_id = %s', (data['expense_id'], user_id))
+            
+        elif data_type == "reminder" and action == "add":
+            # Синхронизируем добавление напоминания
+            cursor.execute('''
+                INSERT INTO payment_reminders (user_id, title, description, amount, start_date, end_date)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT DO NOTHING
+            ''', (user_id, data['title'], data['description'], data['amount'], data['start_date'], data['end_date']))
+            
+        elif data_type == "reminder" and action == "delete":
+            # Синхронизируем удаление напоминания
+            cursor.execute('DELETE FROM payment_reminders WHERE id = %s AND user_id = %s', (data['reminder_id'], user_id))
+            
+        elif data_type == "budget_plan" and action == "add":
+            # Синхронизируем добавление плана бюджета
+            cursor.execute('''
+                INSERT INTO budget_plans (user_id, plan_month, total_amount)
+                VALUES (%s, %s, %s)
+                ON CONFLICT DO NOTHING
+            ''', (user_id, data['plan_month'], data['total_amount']))
+            
+        elif data_type == "budget_item" and action == "add":
+            # Синхронизируем добавление статьи бюджета
+            cursor.execute('''
+                INSERT INTO budget_plan_items (plan_id, category, amount, comment)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT DO NOTHING
+            ''', (data['plan_id'], data['category'], data['amount'], data['comment']))
+            
+        elif data_type == "budget_plan" and action == "delete":
+            # Синхронизируем удаление плана бюджета
+            cursor.execute('DELETE FROM budget_plans WHERE id = %s AND user_id = %s', (data['plan_id'], user_id))
+        
+        conn.commit()
+        conn.close()
+        
+        logger.info(f"Данные синхронизированы в PostgreSQL: {data_type} {action}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Ошибка синхронизации в PostgreSQL: {e}")
+        if conn:
+            conn.rollback()
+            conn.close()
+        return False
 
 
 def sync_group_members_from_database():
