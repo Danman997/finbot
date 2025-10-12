@@ -6278,115 +6278,10 @@ def log_user_action(user_id: int, action: str, details: str = "") -> None:
 # --- ФУНКЦИИ УПРАВЛЕНИЯ ГРУППАМИ ---
 def create_group(name: str, admin_user_id: int) -> tuple[bool, str, str]:
     """Создает новую группу и возвращает (успех, сообщение, код приглашения)"""
-    try:
-        conn = get_db_connection()
-        if not conn:
-            # Fallback к файловой системе
-            logger.info("Нет подключения к БД, используем файловую систему для создания группы")
-            return create_group_file_fallback(name, admin_user_id)
-        
-        cursor = conn.cursor()
-        
-        # Генерируем уникальный код приглашения
-        import secrets
-        import string
-        invitation_code = ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(8))
-        
-        # Проверяем, существует ли пользователь в таблице users
-        cursor.execute('''
-            SELECT id FROM users WHERE id = %s
-        ''', (admin_user_id,))
-        
-        if not cursor.fetchone():
-            # Пользователь не существует в таблице users, создаем его
-            logger.info(f"Пользователь {admin_user_id} не найден в таблице users, создаем...")
-            cursor.execute('''
-                INSERT INTO users (id, username, role)
-                VALUES (%s, %s, %s)
-            ''', (admin_user_id, f"User_{admin_user_id}", "user"))
-            logger.info(f"Пользователь {admin_user_id} создан в таблице users")
-        
-        # Создаем группу
-        cursor.execute('''
-            INSERT INTO groups (name, admin_user_id, invitation_code)
-            VALUES (%s, %s, %s)
-            RETURNING id
-        ''', (name, admin_user_id, invitation_code))
-        
-        group_id = cursor.fetchone()[0]
-        
-        # Добавляем админа как участника группы
-        cursor.execute('''
-            INSERT INTO group_members (group_id, user_id, role)
-            VALUES (%s, %s, %s)
-        ''', (group_id, admin_user_id, "admin"))
-        
-        conn.commit()
-        conn.close()
-        
-        # Создаем папку для группы
-        try:
-            import os
-            import json
-            group_folder = f"group_data/group_{group_id}"
-            os.makedirs(group_folder, exist_ok=True)
-            
-            # Создаем файлы по умолчанию для группы
-            create_default_group_files(group_folder)
-            
-            # Создаем реестр групп в файловой системе
-            groups_registry_file = "group_data/groups_registry.json"
-            groups_registry = {"groups": []}
-            
-            if os.path.exists(groups_registry_file):
-                with open(groups_registry_file, 'r', encoding='utf-8') as f:
-                    groups_registry = json.load(f)
-            
-            # Добавляем новую группу в реестр
-            new_group = {
-                "id": group_id,
-                "name": name,
-                "admin_user_id": admin_user_id,
-                "invitation_code": invitation_code,
-                "created_at": datetime.now().isoformat()
-            }
-            groups_registry["groups"].append(new_group)
-            
-            with open(groups_registry_file, 'w', encoding='utf-8') as f:
-                json.dump(groups_registry, f, ensure_ascii=False, indent=2)
-            
-            # Создаем файл участников группы
-            members_file = os.path.join(group_folder, "members.json")
-            members_data = {
-                "members": [
-                    {
-                        "user_id": admin_user_id,
-                        "role": "admin",
-                        "joined_at": datetime.now().isoformat()
-                    }
-                ]
-            }
-            with open(members_file, 'w', encoding='utf-8') as f:
-                json.dump(members_data, f, ensure_ascii=False, indent=2)
-            
-            logger.info(f"Создана папка группы: {group_folder}")
-            logger.info(f"Добавлена группа в реестр: {new_group}")
-        except Exception as e:
-            logger.error(f"Ошибка при создании папки группы: {e}")
-        
-        logger.info(f"Группа '{name}' создана с ID {group_id}, пользователь {admin_user_id} добавлен как админ")
-        
-        return True, f"Группа '{name}' успешно создана", invitation_code
-        
-    except Exception as e:
-        logger.error(f"Ошибка при создании группы (PostgreSQL): {e}")
-        if conn:
-            conn.rollback()
-            conn.close()
-        
-        # Fallback к файловой системе при ошибке PostgreSQL
-        logger.info("Пробуем fallback на файловую систему для создания группы...")
-        return create_group_file_fallback(name, admin_user_id)
+    # Всегда используем файловую систему как основное хранилище
+    # PostgreSQL используется только как дополнительное хранилище (если доступно)
+    logger.info("Используем файловую систему для создания группы (основное хранилище)")
+    return create_group_file_fallback(name, admin_user_id)
 
 def create_default_group_files(group_folder: str):
     """Создает файлы по умолчанию для группы"""
@@ -6493,13 +6388,16 @@ def create_group_file_fallback(name: str, admin_user_id: int) -> tuple[bool, str
         
         # Создаем папку группы
         group_folder = f"{group_data_dir}/group_{group_id}"
+        logger.info(f"Fallback: создаем папку группы: {group_folder}")
         os.makedirs(group_folder, exist_ok=True)
         
         # Создаем файлы по умолчанию для группы
+        logger.info(f"Fallback: создаем файлы по умолчанию для группы {group_id}")
         create_default_group_files(group_folder)
         
         # Создаем реестр групп в файловой системе
         groups_registry_file = f"{group_data_dir}/groups_registry.json"
+        logger.info(f"Fallback: обновляем реестр групп: {groups_registry_file}")
         groups_registry = {"groups": []}
         
         if os.path.exists(groups_registry_file):
@@ -6515,9 +6413,11 @@ def create_group_file_fallback(name: str, admin_user_id: int) -> tuple[bool, str
             "created_at": datetime.now().isoformat()
         }
         groups_registry["groups"].append(new_group)
+        logger.info(f"Fallback: добавляем группу в реестр: {new_group}")
         
         with open(groups_registry_file, 'w', encoding='utf-8') as f:
             json.dump(groups_registry, f, ensure_ascii=False, indent=2)
+        logger.info(f"Fallback: реестр групп сохранен")
         
         # Создаем файл участников группы
         members_file = os.path.join(group_folder, "members.json")
@@ -6533,10 +6433,15 @@ def create_group_file_fallback(name: str, admin_user_id: int) -> tuple[bool, str
         with open(members_file, 'w', encoding='utf-8') as f:
             json.dump(members_data, f, ensure_ascii=False, indent=2)
         
+        # Убеждаемся, что админ добавлен в authorized_users.json
+        if not is_user_authorized(admin_user_id):
+            add_user_to_authorized_list(f"User_{admin_user_id}", f"group_admin_{admin_user_id}", "admin")
+            logger.info(f"Fallback: пользователь {admin_user_id} добавлен в authorized_users.json как админ группы")
+        
         logger.info(f"Fallback: группа '{name}' создана с ID {group_id} в файловой системе")
         logger.info(f"Fallback: пользователь {admin_user_id} добавлен как админ")
         
-        return True, f"Группа '{name}' успешно создана", invitation_code
+        return True, f"Группа '{name}' успешно создана! Код приглашения: {invitation_code}", invitation_code
         
     except Exception as e:
         logger.error(f"Ошибка в fallback функции создания группы: {e}")
@@ -6546,37 +6451,8 @@ def create_group_file_fallback(name: str, admin_user_id: int) -> tuple[bool, str
 def get_user_group(user_id: int) -> dict:
     """Получает информацию о группе пользователя"""
     try:
-        # Сначала пробуем PostgreSQL
-        conn = get_db_connection()
-        if conn:
-            try:
-                cursor = conn.cursor()
-                cursor.execute('''
-                    SELECT g.id, g.name, g.admin_user_id, g.invitation_code, gm.role
-                    FROM groups g
-                    JOIN group_members gm ON g.id = gm.group_id
-                    WHERE gm.user_id = %s
-                ''', (user_id,))
-                
-                result = cursor.fetchone()
-                conn.close()
-                
-                if result:
-                    group_info = {
-                        "id": result[0],
-                        "name": result[1],
-                        "admin_user_id": result[2],
-                        "invitation_code": result[3],
-                        "role": result[4]
-                    }
-                    logger.info(f"Найдена группа для пользователя {user_id}: {group_info}")
-                    return group_info
-            except Exception as db_error:
-                logger.warning(f"Ошибка при получении группы из PostgreSQL: {db_error}")
-                if conn:
-                    conn.close()
-        
-        # Fallback: ищем в файловой системе
+        # Всегда используем файловую систему как основное хранилище
+        logger.info(f"Поиск группы для пользователя {user_id} в файловой системе")
         return get_user_group_file_fallback(user_id)
         
     except Exception as e:
@@ -6655,105 +6531,13 @@ def join_group_by_invitation(invitation_code: str, user_id: int, phone: str) -> 
         
         logger.info(f"Присоединение к группе: user_id={user_id} (тип: {type(user_id)}), код={invitation_code}")
         
-        conn = get_db_connection()
-        if not conn:
-            # Fallback к файловой системе
-            logger.info("Нет подключения к БД, используем файловую систему для присоединения к группе")
-            return join_group_by_invitation_file_fallback(invitation_code, user_id, phone)
-        
-        cursor = conn.cursor()
-        
-        # Проверяем код приглашения
-        cursor.execute('''
-            SELECT id, name
-            FROM groups
-            WHERE invitation_code = %s
-        ''', (invitation_code,))
-        
-        group_info = cursor.fetchone()
-        if not group_info:
-            return False, "Неверный код приглашения"
-        
-        group_id, group_name = group_info
-        
-        # Проверяем количество участников (максимум 5)
-        cursor.execute('''
-            SELECT COUNT(*) FROM group_members WHERE group_id = %s
-        ''', (group_id,))
-        
-        current_members = cursor.fetchone()[0]
-        if current_members >= 5:
-            return False, f"Группа '{group_name}' уже заполнена (максимум 5 участников)"
-        
-        # Проверяем, не является ли пользователь уже участником
-        cursor.execute('''
-            SELECT id FROM group_members 
-            WHERE group_id = %s AND user_id = %s
-        ''', (group_id, user_id))
-        
-        if cursor.fetchone():
-            return False, "Вы уже являетесь участником этой группы"
-        
-        # Проверяем, существует ли пользователь в таблице users
-        cursor.execute('''
-            SELECT id FROM users WHERE id = %s
-        ''', (user_id,))
-        
-        if not cursor.fetchone():
-            # Пользователь не существует в таблице users, создаем его
-            logger.info(f"Пользователь {user_id} не найден в таблице users, создаем...")
-            cursor.execute('''
-                INSERT INTO users (id, username, role)
-                VALUES (%s, %s, %s)
-            ''', (user_id, f"User_{user_id}", "user"))
-            logger.info(f"Пользователь {user_id} создан в таблице users")
-        
-        # Добавляем пользователя в группу
-        logger.info(f"Добавление в группу: group_id={group_id} (тип: {type(group_id)}), user_id={user_id} (тип: {type(user_id)})")
-        
-        try:
-            cursor.execute('''
-                INSERT INTO group_members (group_id, user_id, role)
-                VALUES (%s, %s, %s)
-            ''', (int(group_id), int(user_id), "member"))
-            logger.info("INSERT запрос выполнен успешно")
-        except Exception as insert_error:
-            logger.error(f"Ошибка INSERT запроса: {insert_error}")
-            logger.error(f"Типы данных: group_id={type(group_id)}, user_id={type(user_id)}")
-            logger.error(f"Значения: group_id={group_id}, user_id={user_id}")
-            raise insert_error
-        
-        conn.commit()
-        conn.close()
-        
-        # Убеждаемся, что папка группы существует
-        try:
-            import os
-            group_folder = f"group_data/group_{group_id}"
-            if not os.path.exists(group_folder):
-                os.makedirs(group_folder, exist_ok=True)
-                create_default_group_files(group_folder)
-                logger.info(f"Создана папка группы при присоединении: {group_folder}")
-        except Exception as e:
-            logger.error(f"Ошибка при создании папки группы: {e}")
-        
-        # Убеждаемся, что пользователь добавлен в authorized_users.json
-        if not is_user_authorized(user_id):
-            add_user_to_authorized_list(f"User_{user_id}", f"group_member_{user_id}", "user")
-            logger.info(f"Пользователь {user_id} добавлен в authorized_users.json при присоединении к группе")
-        
-        logger.info(f"Пользователь {user_id} успешно присоединился к группе '{group_name}' (ID: {group_id})")
-        return True, f"Вы успешно присоединились к группе '{group_name}'"
+        # Всегда используем файловую систему как основное хранилище
+        logger.info("Используем файловую систему для присоединения к группе (основное хранилище)")
+        return join_group_by_invitation_file_fallback(invitation_code, user_id, phone)
         
     except Exception as e:
-        logger.error(f"Ошибка при присоединении к группе (PostgreSQL): {e}")
-        if conn:
-            conn.rollback()
-            conn.close()
-        
-        # Fallback: пробуем использовать файловую систему
-        logger.info("Пробуем fallback на файловую систему...")
-        return join_group_by_invitation_file_fallback(invitation_code, user_id, phone)
+        logger.error(f"Ошибка при присоединении к группе: {e}")
+        return False, f"Ошибка при присоединении к группе: {e}"
 
 def join_group_by_invitation_file_fallback(invitation_code: str, user_id: int, phone: str) -> tuple[bool, str]:
     """Fallback функция для присоединения к группе через файловую систему"""
@@ -6763,22 +6547,27 @@ def join_group_by_invitation_file_fallback(invitation_code: str, user_id: int, p
         import os
         import json
         
-        # Сначала синхронизируем группы из PostgreSQL в файловую систему
-        sync_groups_from_database()
+        # Проверяем реестр групп в файловой системе (основное хранилище)
+        logger.info(f"Fallback: ищем код {invitation_code} в файловой системе")
         
         # Затем пробуем найти группу по коду в файловой системе
         groups_registry_file = "group_data/groups_registry.json"
+        logger.info(f"Fallback: ищем код {invitation_code} в файле {groups_registry_file}")
         
         if os.path.exists(groups_registry_file):
             # Читаем реестр групп
             with open(groups_registry_file, 'r', encoding='utf-8') as f:
                 groups_registry = json.load(f)
             
+            logger.info(f"Fallback: найдено {len(groups_registry.get('groups', []))} групп в реестре")
+            
             # Ищем группу по коду приглашения
             group_info = None
             for group in groups_registry.get("groups", []):
+                logger.info(f"Fallback: проверяем группу с кодом {group.get('invitation_code')}")
                 if group.get("invitation_code") == invitation_code:
                     group_info = group
+                    logger.info(f"Fallback: найдена группа {group_info}")
                     break
             
             if group_info:
@@ -6844,38 +6633,13 @@ def is_user_in_group(user_id: int) -> bool:
 def get_group_members(group_id: int) -> list:
     """Получает список участников группы"""
     try:
-        conn = get_db_connection()
-        if not conn:
-            # Fallback к файловой системе
-            return get_group_members_file_fallback(group_id)
-        
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT gm.user_id, gm.role, gm.joined_at
-            FROM group_members gm
-            WHERE gm.group_id = %s
-            ORDER BY gm.joined_at
-        ''', (group_id,))
-        
-        members = []
-        for row in cursor.fetchall():
-            members.append({
-                "user_id": row[0],
-                "role": row[1],
-                "joined_at": row[2]
-            })
-        
-        conn.close()
-        return members
+        # Всегда используем файловую систему как основное хранилище
+        logger.info(f"Получение участников группы {group_id} из файловой системы")
+        return get_group_members_file_fallback(group_id)
         
     except Exception as e:
-        logger.error(f"Ошибка при получении участников группы (PostgreSQL): {e}")
-        if conn:
-            conn.close()
-        
-        # Fallback к файловой системе
-        logger.info("Пробуем fallback на файловую систему для получения участников группы...")
-        return get_group_members_file_fallback(group_id)
+        logger.error(f"Ошибка при получении участников группы: {e}")
+        return []
 
 
 def get_group_members_file_fallback(group_id: int) -> list:
@@ -7014,9 +6778,10 @@ def remove_group_member_file_fallback(user_id: int) -> tuple[bool, str]:
 def sync_groups_from_database():
     """Синхронизирует группы из PostgreSQL в файловую систему"""
     try:
+        logger.info("Начинаем опциональную синхронизацию групп из PostgreSQL...")
         conn = get_db_connection()
         if not conn:
-            logger.warning("Нет подключения к БД для синхронизации групп")
+            logger.info("Нет подключения к PostgreSQL, пропускаем синхронизацию")
             return
         
         cursor = conn.cursor()
@@ -7030,6 +6795,11 @@ def sync_groups_from_database():
         
         db_groups = cursor.fetchall()
         conn.close()
+        
+        logger.info(f"Синхронизация: найдено {len(db_groups)} групп в PostgreSQL")
+        for group_row in db_groups:
+            group_id, name, admin_user_id, invitation_code, created_at = group_row
+            logger.info(f"Синхронизация: группа {group_id} '{name}' код {invitation_code}")
         
         if not db_groups:
             logger.info("В PostgreSQL нет групп для синхронизации")
@@ -7055,9 +6825,11 @@ def sync_groups_from_database():
                 
                 # Создаем папку группы
                 group_folder = f"group_data/group_{group_id}"
+                logger.info(f"Синхронизация: создаем папку группы {group_folder}")
                 os.makedirs(group_folder, exist_ok=True)
                 
                 # Создаем файлы по умолчанию
+                logger.info(f"Синхронизация: создаем файлы по умолчанию для группы {group_id}")
                 create_default_group_files(group_folder)
                 
                 # Создаем файл участников с админом
