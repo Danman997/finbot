@@ -236,6 +236,14 @@ def train_model(data):
     try:
         descriptions = [normalize(item[0]) for item in use_data]
         categories = [item[1] for item in use_data]
+        
+        # Проверяем количество уникальных категорий
+        unique_categories = set(categories)
+        if len(unique_categories) < 2:
+            logger.warning(f"Недостаточно категорий для обучения модели: найдено {len(unique_categories)} категорий {unique_categories}. Нужно минимум 2.")
+            return
+        
+        logger.info(f"Обучение модели на {len(use_data)} записях с {len(unique_categories)} категориями: {unique_categories}")
 
         # Обучаем модель
         X = vectorizer.fit_transform(descriptions)
@@ -2584,6 +2592,22 @@ async def manual_training(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         training_data = get_all_expenses_for_training()
         
         if training_data:
+            # Проверяем количество уникальных категорий
+            unique_categories = set(category for _, category in training_data)
+            
+            if len(unique_categories) < 2:
+                categories_list = list(unique_categories)
+                await update.message.reply_text(
+                    f"⚠️ Недостаточно категорий для обучения модели.\n"
+                    f"Найдено только {len(unique_categories)} категори{'й' if len(unique_categories) > 1 else 'я'}: {', '.join(categories_list)}\n"
+                    f"Добавьте расходы в разные категории (например, продукты, транспорт, развлечения).",
+                    reply_markup=get_main_menu_keyboard()
+                )
+                return
+            
+            # Сохраняем количество записей до обучения
+            records_count = len(training_data)
+            
             # Обучаем модель
             train_model(training_data)
             
@@ -2593,7 +2617,8 @@ async def manual_training(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     CATEGORIES[category].append(description.lower())
             
             await update.message.reply_text(
-                f"🤖 Модель успешно обучена на {len(training_data)} записях!\n"
+                f"🤖 Модель успешно обучена на {records_count} записях!\n"
+                f"Категории: {', '.join(unique_categories)}\n"
                 "Теперь классификация будет более точной.",
                 reply_markup=get_main_menu_keyboard()
             )
@@ -5242,17 +5267,34 @@ async def reminder_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         
         for i, (rem_id, title, desc, amount, start_date, end_date, sent_10, sent_3, created) in enumerate(reminders, 1):
             # Правильный расчет: общее количество дней в периоде
-            total_days = (end_date - start_date).days
-            # Дней до окончания напоминания
-            days_until_end = (end_date - datetime.now().date()).days
-            status = "🟢 Активно" if days_until_end > 0 else "🔴 Истекло"
+            total_days = (end_date - start_date).days + 1  # +1 чтобы включить оба дня
+            
+            # Текущая дата
+            today = datetime.now().date()
+            
+            # Определяем статус и оставшиеся дни
+            if today < start_date:
+                # Напоминание еще не началось
+                days_until_start = (start_date - today).days
+                status = f"⏳ Начнется через {days_until_start} дней"
+                days_info = f"({total_days} дней)"
+            elif today > end_date:
+                # Напоминание истекло
+                days_overdue = (today - end_date).days
+                status = f"🔴 Истекло {days_overdue} дней назад"
+                days_info = f"({total_days} дней)"
+            else:
+                # Напоминание активно
+                days_remaining = (end_date - today).days + 1  # +1 чтобы включить сегодня
+                status = f"🟢 Активно (осталось {days_remaining} дней)"
+                days_info = f"из {total_days}"
             
             reminders_text += f"{i}. {title}\n"
             if desc:
                 reminders_text += f"   📝 {desc}\n"
             reminders_text += f"   💰 {amount:.2f} Тг\n"
             reminders_text += f"   📅 {start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')}\n"
-            reminders_text += f"   {status} (осталось {days_until_end} дней из {total_days})\n\n"
+            reminders_text += f"   {status} {days_info}\n\n"
             
             total_amount += amount
         
@@ -5286,8 +5328,18 @@ async def reminder_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         keyboard = []
         
         for i, (rem_id, title, desc, amount, start_date, end_date, sent_10, sent_3, created) in enumerate(reminders, 1):
-            days_until_end = (end_date - datetime.now().date()).days
-            reminders_text += f"{i}. {title} - {amount:.2f} Тг (осталось {days_until_end} дней)\n"
+            today = datetime.now().date()
+            if today > end_date:
+                days_overdue = (today - end_date).days
+                days_info = f"истекло {days_overdue} дней назад"
+            elif today < start_date:
+                days_until_start = (start_date - today).days
+                days_info = f"начнется через {days_until_start} дней"
+            else:
+                days_remaining = (end_date - today).days + 1
+                days_info = f"осталось {days_remaining} дней"
+            
+            reminders_text += f"{i}. {title} - {amount:.2f} Тг ({days_info})\n"
             keyboard.append([KeyboardButton(f"❌ Удалить {i}")])
         
         keyboard.append([KeyboardButton("🔙 Назад")])
@@ -5419,8 +5471,18 @@ async def reminder_end_date_input(update: Update, context: ContextTypes.DEFAULT_
     
     if add_payment_reminder(title, desc, amount, start_date, end_date, user_id):
         # Правильный расчет: общее количество дней в периоде
-        total_days = (end_date - start_date).days
-        days_until_end = (end_date - datetime.now().date()).days
+        total_days = (end_date - start_date).days + 1  # +1 чтобы включить оба дня
+        
+        today = datetime.now().date()
+        if today < start_date:
+            days_until_start = (start_date - today).days
+            time_info = f"⏳ Начнется через {days_until_start} дней"
+        elif today > end_date:
+            days_overdue = (today - end_date).days
+            time_info = f"🔴 Истекло {days_overdue} дней назад"
+        else:
+            days_remaining = (end_date - today).days + 1
+            time_info = f"🟢 Активно, осталось {days_remaining} дней"
         
         await update.message.reply_text(
             f"✅ Напоминание успешно добавлено!\n\n"
@@ -5428,7 +5490,8 @@ async def reminder_end_date_input(update: Update, context: ContextTypes.DEFAULT_
             f"📝 {desc or 'Описание не указано'}\n"
             f"💰 {amount:.2f} Тг\n"
             f"📅 {start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')}\n"
-            f"⏰ Период: {total_days} дней, осталось: {days_until_end} дней\n\n"
+            f"⏰ Период: {total_days} дней\n"
+            f"{time_info}\n\n"
             f"Бот будет напоминать о необходимости оплаты за 10 и 3 дня до истечения срока.",
             reply_markup=get_main_menu_keyboard()
         )
