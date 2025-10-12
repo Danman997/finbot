@@ -3755,15 +3755,40 @@ def migrate_existing_data():
     try:
         # Проверяем, есть ли данные для миграции
         import os
+        
+        # Проверяем, была ли миграция уже выполнена
+        migration_flag_file = "migration_completed.flag"
+        if os.path.exists(migration_flag_file):
+            logger.info("Миграция данных уже была выполнена, пропускаем")
+            return
+        
         if os.path.exists('authorized_users.json'):
             logger.info("Начинаем автоматическую миграцию данных...")
             from migrate_to_database import migrate_all_users
             migrate_all_users()
+            
+            # Создаем флаг завершения миграции
+            with open(migration_flag_file, 'w') as f:
+                f.write("migration_completed")
+            
             logger.info("Миграция данных завершена")
         else:
             logger.info("Нет данных для миграции")
     except Exception as e:
         logger.error(f"Ошибка миграции данных: {e}")
+
+def reset_migration_flags():
+    """Сбросить флаги миграции (использовать только при необходимости)"""
+    import os
+    try:
+        if os.path.exists("migration_completed.flag"):
+            os.remove("migration_completed.flag")
+            logger.info("Флаг миграции сброшен")
+        if os.path.exists("sync_completed.flag"):
+            os.remove("sync_completed.flag")
+            logger.info("Флаг синхронизации сброшен")
+    except Exception as e:
+        logger.error(f"Ошибка сброса флагов: {e}")
 
 def main():
     train_model(TRAINING_DATA)
@@ -6975,6 +7000,13 @@ def remove_group_member_file_fallback(user_id: int) -> tuple[bool, str]:
 def sync_groups_from_database():
     """Синхронизирует группы из PostgreSQL в файловую систему"""
     try:
+        # Проверяем, была ли синхронизация уже выполнена
+        import os
+        sync_flag_file = "sync_completed.flag"
+        if os.path.exists(sync_flag_file):
+            logger.info("Синхронизация групп уже была выполнена, пропускаем")
+            return
+        
         logger.info("Начинаем опциональную синхронизацию групп из PostgreSQL...")
         conn = get_db_connection()
         if not conn:
@@ -7070,6 +7102,10 @@ def sync_groups_from_database():
         
         # Дополнительно синхронизируем участников групп только для новых групп
         sync_group_members_from_database()
+        
+        # Создаем флаг завершения синхронизации
+        with open(sync_flag_file, 'w') as f:
+            f.write("sync_completed")
         
     except Exception as e:
         logger.error(f"Ошибка при синхронизации групп: {e}")
