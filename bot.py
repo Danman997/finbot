@@ -1017,21 +1017,71 @@ def get_recent_expenses(limit=10, user_id=None):
             return []
 
 def get_all_expenses_for_training():
-    """Получить все расходы для обучения модели"""
-    conn = get_db_connection()
-    if not conn:
-        return []
+    """Получить все расходы для обучения модели из всех источников"""
+    training_data = []
+    
     try:
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT description, category FROM expenses
-        ''')
-        return cursor.fetchall()
+        # Получаем данные из PostgreSQL (для старых пользователей)
+        conn = get_db_connection()
+        if conn:
+            try:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT description, category FROM expenses
+                ''')
+                db_data = cursor.fetchall()
+                training_data.extend(db_data)
+                logger.info(f"Добавлено {len(db_data)} записей из PostgreSQL для обучения")
+            except Exception as e:
+                logger.error(f"Ошибка при получении данных из PostgreSQL для обучения: {e}")
+            finally:
+                conn.close()
+        
+        # Получаем данные из файловой системы (для новых пользователей и групп)
+        import os
+        import csv
+        
+        # Проверяем папки пользователей
+        users_dir = "users"
+        if os.path.exists(users_dir):
+            for user_folder in os.listdir(users_dir):
+                user_path = os.path.join(users_dir, user_folder)
+                if os.path.isdir(user_path):
+                    expenses_file = os.path.join(user_path, "expenses.csv")
+                    if os.path.exists(expenses_file):
+                        try:
+                            with open(expenses_file, 'r', encoding='utf-8') as f:
+                                reader = csv.DictReader(f)
+                                for row in reader:
+                                    if row.get('description') and row.get('category'):
+                                        training_data.append((row['description'], row['category']))
+                        except Exception as e:
+                            logger.error(f"Ошибка при чтении файла расходов {expenses_file}: {e}")
+        
+        # Проверяем папки групп
+        group_data_dir = "group_data"
+        if os.path.exists(group_data_dir):
+            for item in os.listdir(group_data_dir):
+                if item.startswith("group_"):
+                    group_folder = os.path.join(group_data_dir, item)
+                    if os.path.isdir(group_folder):
+                        expenses_file = os.path.join(group_folder, "expenses.csv")
+                        if os.path.exists(expenses_file):
+                            try:
+                                with open(expenses_file, 'r', encoding='utf-8') as f:
+                                    reader = csv.DictReader(f)
+                                    for row in reader:
+                                        if row.get('description') and row.get('category'):
+                                            training_data.append((row['description'], row['category']))
+                            except Exception as e:
+                                logger.error(f"Ошибка при чтении файла расходов группы {expenses_file}: {e}")
+        
+        logger.info(f"Всего собрано {len(training_data)} записей для обучения модели")
+        return training_data
+        
     except Exception as e:
         logger.error(f"Ошибка при получении данных для обучения: {e}")
         return []
-    finally:
-        conn.close()
 
 def delete_expense(expense_id: int, user_id: int = None) -> bool:
     """Удалить расход по ID"""
@@ -5191,15 +5241,18 @@ async def reminder_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         total_amount = 0
         
         for i, (rem_id, title, desc, amount, start_date, end_date, sent_10, sent_3, created) in enumerate(reminders, 1):
-            days_left = (end_date - datetime.now().date()).days
-            status = "🟢 Активно" if days_left > 0 else "🔴 Истекло"
+            # Правильный расчет: общее количество дней в периоде
+            total_days = (end_date - start_date).days
+            # Дней до окончания напоминания
+            days_until_end = (end_date - datetime.now().date()).days
+            status = "🟢 Активно" if days_until_end > 0 else "🔴 Истекло"
             
             reminders_text += f"{i}. {title}\n"
             if desc:
                 reminders_text += f"   📝 {desc}\n"
             reminders_text += f"   💰 {amount:.2f} Тг\n"
             reminders_text += f"   📅 {start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')}\n"
-            reminders_text += f"   {status} (осталось {days_left} дней)\n\n"
+            reminders_text += f"   {status} (осталось {days_until_end} дней из {total_days})\n\n"
             
             total_amount += amount
         
@@ -5233,8 +5286,8 @@ async def reminder_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         keyboard = []
         
         for i, (rem_id, title, desc, amount, start_date, end_date, sent_10, sent_3, created) in enumerate(reminders, 1):
-            days_left = (end_date - datetime.now().date()).days
-            reminders_text += f"{i}. {title} - {amount:.2f} Тг (осталось {days_left} дней)\n"
+            days_until_end = (end_date - datetime.now().date()).days
+            reminders_text += f"{i}. {title} - {amount:.2f} Тг (осталось {days_until_end} дней)\n"
             keyboard.append([KeyboardButton(f"❌ Удалить {i}")])
         
         keyboard.append([KeyboardButton("🔙 Назад")])
@@ -5365,7 +5418,9 @@ async def reminder_end_date_input(update: Update, context: ContextTypes.DEFAULT_
     user_id = update.effective_user.id
     
     if add_payment_reminder(title, desc, amount, start_date, end_date, user_id):
-        days_left = (end_date - datetime.now().date()).days
+        # Правильный расчет: общее количество дней в периоде
+        total_days = (end_date - start_date).days
+        days_until_end = (end_date - datetime.now().date()).days
         
         await update.message.reply_text(
             f"✅ Напоминание успешно добавлено!\n\n"
@@ -5373,7 +5428,7 @@ async def reminder_end_date_input(update: Update, context: ContextTypes.DEFAULT_
             f"📝 {desc or 'Описание не указано'}\n"
             f"💰 {amount:.2f} Тг\n"
             f"📅 {start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')}\n"
-            f"⏰ Осталось дней: {days_left}\n\n"
+            f"⏰ Период: {total_days} дней, осталось: {days_until_end} дней\n\n"
             f"Бот будет напоминать о необходимости оплаты за 10 и 3 дня до истечения срока.",
             reply_markup=get_main_menu_keyboard()
         )
