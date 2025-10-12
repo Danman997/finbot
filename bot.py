@@ -6879,53 +6879,13 @@ def get_group_members_file_fallback(group_id: int) -> list:
 def remove_group_member(user_id: int) -> tuple[bool, str]:
     """Удаляет участника из группы"""
     try:
-        # Сначала пытаемся удалить из PostgreSQL
-        conn = get_db_connection()
-        if conn:
-            cursor = conn.cursor()
-            
-            # Получаем информацию о группе пользователя
-            cursor.execute('''
-                SELECT group_id FROM group_members WHERE user_id = %s
-            ''', (user_id,))
-            
-            result = cursor.fetchone()
-            if not result:
-                conn.close()
-                return False, "Пользователь не найден в группе"
-            
-            group_id = result[0]
-            
-            # Удаляем из базы данных
-            cursor.execute('''
-                DELETE FROM group_members WHERE user_id = %s
-            ''', (user_id,))
-            
-            conn.commit()
-            conn.close()
-            
-            # Удаляем пользователя из authorized_users.json
-            try:
-                delete_user_from_authorized_list(f"User_{user_id}")
-                logger.info(f"Пользователь {user_id} удален из authorized_users.json")
-            except Exception as e:
-                logger.warning(f"Не удалось удалить пользователя {user_id} из authorized_users.json: {e}")
-            
-            logger.info(f"Пользователь {user_id} удален из группы {group_id} (PostgreSQL)")
-            return True, f"Пользователь удален из группы"
-        
-        # Fallback к файловой системе
+        # Всегда используем файловую систему как основное хранилище
+        logger.info(f"Удаление участника {user_id} из группы через файловую систему")
         return remove_group_member_file_fallback(user_id)
         
     except Exception as e:
-        logger.error(f"Ошибка при удалении участника группы (PostgreSQL): {e}")
-        if conn:
-            conn.rollback()
-            conn.close()
-        
-        # Fallback к файловой системе
-        logger.info("Пробуем fallback на файловую систему для удаления участника...")
-        return remove_group_member_file_fallback(user_id)
+        logger.error(f"Ошибка при удалении участника группы: {e}")
+        return False, f"Ошибка при удалении: {e}"
 
 
 def remove_group_member_file_fallback(user_id: int) -> tuple[bool, str]:
@@ -6934,24 +6894,38 @@ def remove_group_member_file_fallback(user_id: int) -> tuple[bool, str]:
         import os
         import json
         
+        logger.info(f"Поиск пользователя {user_id} для удаления из группы")
+        
         # Ищем пользователя в папках групп
         group_data_dir = "group_data"
         if not os.path.exists(group_data_dir):
+            logger.warning(f"Папка групп не найдена: {group_data_dir}")
             return False, "Группы не найдены"
+        
+        logger.info(f"Поиск в папке: {group_data_dir}")
         
         for item in os.listdir(group_data_dir):
             if item.startswith("group_"):
                 group_folder = os.path.join(group_data_dir, item)
                 if os.path.isdir(group_folder):
                     members_file = os.path.join(group_folder, "members.json")
+                    logger.info(f"Проверяем файл участников: {members_file}")
+                    
                     if os.path.exists(members_file):
                         with open(members_file, 'r', encoding='utf-8') as f:
                             members_data = json.load(f)
                         
+                        logger.info(f"Данные участников группы {item}: {members_data}")
+                        
                         # Ищем пользователя в этой группе
                         members = members_data.get("members", [])
+                        logger.info(f"Список участников группы {item}: {members}")
+                        
                         for i, member in enumerate(members):
+                            logger.info(f"Проверяем участника {i}: {member} (ищем user_id: {user_id})")
                             if member.get("user_id") == user_id:
+                                logger.info(f"Найден участник для удаления: {member}")
+                                
                                 # Удаляем пользователя
                                 members.pop(i)
                                 members_data["members"] = members
@@ -6959,6 +6933,8 @@ def remove_group_member_file_fallback(user_id: int) -> tuple[bool, str]:
                                 # Сохраняем обновленный файл
                                 with open(members_file, 'w', encoding='utf-8') as f:
                                     json.dump(members_data, f, ensure_ascii=False, indent=2)
+                                
+                                logger.info(f"Файл участников обновлен: {members_data}")
                                 
                                 # Удаляем пользователя из authorized_users.json
                                 try:
@@ -6970,7 +6946,10 @@ def remove_group_member_file_fallback(user_id: int) -> tuple[bool, str]:
                                 group_id = int(item.replace("group_", ""))
                                 logger.info(f"Fallback: пользователь {user_id} удален из группы {group_id}")
                                 return True, f"Пользователь удален из группы"
+                    else:
+                        logger.warning(f"Файл участников не найден: {members_file}")
         
+        logger.warning(f"Пользователь {user_id} не найден ни в одной группе")
         return False, "Пользователь не найден ни в одной группе"
         
     except Exception as e:
