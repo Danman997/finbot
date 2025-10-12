@@ -3172,6 +3172,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         
         success, message, invitation_code = create_group(group_name, user_id)
         if success:
+            # Убеждаемся, что пользователь добавлен в authorized_users.json
+            if not is_user_authorized(user_id):
+                add_user_to_authorized_list(f"User_{user_id}", f"group_admin_{user_id}", "user")
+                logger.info(f"Пользователь {user_id} добавлен в authorized_users.json при создании группы")
+            
             await update.message.reply_text(
                 f"✅ Группа '{group_name}' создана!\n\n"
                 f"🔑 Код приглашения: {invitation_code}\n\n"
@@ -6271,7 +6276,9 @@ def create_group(name: str, admin_user_id: int) -> tuple[bool, str, str]:
     try:
         conn = get_db_connection()
         if not conn:
-            return False, "Ошибка подключения к базе данных", ""
+            # Fallback к файловой системе
+            logger.info("Нет подключения к БД, используем файловую систему для создания группы")
+            return create_group_file_fallback(name, admin_user_id)
         
         cursor = conn.cursor()
         
@@ -6279,6 +6286,20 @@ def create_group(name: str, admin_user_id: int) -> tuple[bool, str, str]:
         import secrets
         import string
         invitation_code = ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(8))
+        
+        # Проверяем, существует ли пользователь в таблице users
+        cursor.execute('''
+            SELECT id FROM users WHERE id = %s
+        ''', (admin_user_id,))
+        
+        if not cursor.fetchone():
+            # Пользователь не существует в таблице users, создаем его
+            logger.info(f"Пользователь {admin_user_id} не найден в таблице users, создаем...")
+            cursor.execute('''
+                INSERT INTO users (id, username, role)
+                VALUES (%s, %s, %s)
+            ''', (admin_user_id, f"User_{admin_user_id}", "user"))
+            logger.info(f"Пользователь {admin_user_id} создан в таблице users")
         
         # Создаем группу
         cursor.execute('''
@@ -6353,11 +6374,14 @@ def create_group(name: str, admin_user_id: int) -> tuple[bool, str, str]:
         return True, f"Группа '{name}' успешно создана", invitation_code
         
     except Exception as e:
-        logger.error(f"Ошибка при создании группы: {e}")
+        logger.error(f"Ошибка при создании группы (PostgreSQL): {e}")
         if conn:
             conn.rollback()
             conn.close()
-        return False, f"Ошибка при создании группы: {str(e)}", ""
+        
+        # Fallback к файловой системе при ошибке PostgreSQL
+        logger.info("Пробуем fallback на файловую систему для создания группы...")
+        return create_group_file_fallback(name, admin_user_id)
 
 def create_default_group_files(group_folder: str):
     """Создает файлы по умолчанию для группы"""
@@ -6436,6 +6460,83 @@ def create_default_group_files(group_folder: str):
         
     except Exception as e:
         logger.error(f"Ошибка при создании файлов по умолчанию для группы: {e}")
+
+
+def create_group_file_fallback(name: str, admin_user_id: int) -> tuple[bool, str, str]:
+    """Fallback функция для создания группы через файловую систему"""
+    try:
+        logger.info(f"Fallback: создание группы через файловую систему, name='{name}', admin_user_id={admin_user_id}")
+        
+        import os
+        import json
+        import secrets
+        import string
+        from datetime import datetime
+        
+        # Генерируем уникальный код приглашения
+        invitation_code = ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(8))
+        
+        # Определяем ID группы (находим следующий доступный ID)
+        group_data_dir = "group_data"
+        if not os.path.exists(group_data_dir):
+            os.makedirs(group_data_dir, exist_ok=True)
+        
+        # Находим следующий доступный ID группы
+        group_id = 1
+        while os.path.exists(f"{group_data_dir}/group_{group_id}"):
+            group_id += 1
+        
+        # Создаем папку группы
+        group_folder = f"{group_data_dir}/group_{group_id}"
+        os.makedirs(group_folder, exist_ok=True)
+        
+        # Создаем файлы по умолчанию для группы
+        create_default_group_files(group_folder)
+        
+        # Создаем реестр групп в файловой системе
+        groups_registry_file = f"{group_data_dir}/groups_registry.json"
+        groups_registry = {"groups": []}
+        
+        if os.path.exists(groups_registry_file):
+            with open(groups_registry_file, 'r', encoding='utf-8') as f:
+                groups_registry = json.load(f)
+        
+        # Добавляем новую группу в реестр
+        new_group = {
+            "id": group_id,
+            "name": name,
+            "admin_user_id": admin_user_id,
+            "invitation_code": invitation_code,
+            "created_at": datetime.now().isoformat()
+        }
+        groups_registry["groups"].append(new_group)
+        
+        with open(groups_registry_file, 'w', encoding='utf-8') as f:
+            json.dump(groups_registry, f, ensure_ascii=False, indent=2)
+        
+        # Создаем файл участников группы
+        members_file = os.path.join(group_folder, "members.json")
+        members_data = {
+            "members": [
+                {
+                    "user_id": admin_user_id,
+                    "role": "admin",
+                    "joined_at": datetime.now().isoformat()
+                }
+            ]
+        }
+        with open(members_file, 'w', encoding='utf-8') as f:
+            json.dump(members_data, f, ensure_ascii=False, indent=2)
+        
+        logger.info(f"Fallback: группа '{name}' создана с ID {group_id} в файловой системе")
+        logger.info(f"Fallback: пользователь {admin_user_id} добавлен как админ")
+        
+        return True, f"Группа '{name}' успешно создана", invitation_code
+        
+    except Exception as e:
+        logger.error(f"Ошибка в fallback функции создания группы: {e}")
+        return False, f"Ошибка при создании группы: {str(e)}", ""
+
 
 def get_user_group(user_id: int) -> dict:
     """Получает информацию о группе пользователя"""
