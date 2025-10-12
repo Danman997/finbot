@@ -6904,6 +6904,13 @@ def remove_group_member(user_id: int) -> tuple[bool, str]:
             conn.commit()
             conn.close()
             
+            # Удаляем пользователя из authorized_users.json
+            try:
+                delete_user_from_authorized_list(f"User_{user_id}")
+                logger.info(f"Пользователь {user_id} удален из authorized_users.json")
+            except Exception as e:
+                logger.warning(f"Не удалось удалить пользователя {user_id} из authorized_users.json: {e}")
+            
             logger.info(f"Пользователь {user_id} удален из группы {group_id} (PostgreSQL)")
             return True, f"Пользователь удален из группы"
         
@@ -6952,6 +6959,13 @@ def remove_group_member_file_fallback(user_id: int) -> tuple[bool, str]:
                                 # Сохраняем обновленный файл
                                 with open(members_file, 'w', encoding='utf-8') as f:
                                     json.dump(members_data, f, ensure_ascii=False, indent=2)
+                                
+                                # Удаляем пользователя из authorized_users.json
+                                try:
+                                    delete_user_from_authorized_list(f"User_{user_id}")
+                                    logger.info(f"Fallback: пользователь {user_id} удален из authorized_users.json")
+                                except Exception as e:
+                                    logger.warning(f"Не удалось удалить пользователя {user_id} из authorized_users.json: {e}")
                                 
                                 group_id = int(item.replace("group_", ""))
                                 logger.info(f"Fallback: пользователь {user_id} удален из группы {group_id}")
@@ -7017,9 +7031,13 @@ def sync_groups_from_database():
                 logger.info(f"Синхронизация: создаем папку группы {group_folder}")
                 os.makedirs(group_folder, exist_ok=True)
                 
-                # Создаем файлы по умолчанию
-                logger.info(f"Синхронизация: создаем файлы по умолчанию для группы {group_id}")
-                create_default_group_files(group_folder)
+                # Создаем файлы по умолчанию только если папка пустая
+                expenses_file = os.path.join(group_folder, "expenses.csv")
+                if not os.path.exists(expenses_file):
+                    logger.info(f"Синхронизация: создаем файлы по умолчанию для группы {group_id}")
+                    create_default_group_files(group_folder)
+                else:
+                    logger.info(f"Синхронизация: группа {group_id} уже имеет данные, не перезаписываем")
                 
                 # Создаем файл участников с админом (только если файл не существует)
                 members_file = os.path.join(group_folder, "members.json")
